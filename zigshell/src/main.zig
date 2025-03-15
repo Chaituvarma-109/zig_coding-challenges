@@ -26,14 +26,25 @@ fn typeBuilt(alloc: std.mem.Allocator, args: []const u8) !?[]const u8 {
     return null;
 }
 
-fn writeToFile(file: std.fs.File, cmd: []const u8, arg: []const u8) !void {
+fn writeToFile(file: std.fs.File, cmd: []const u8) !void {
     try file.seekFromEnd(0);
     try file.writeAll(cmd);
-    if (arg.len != 0) {
-        try file.writeAll(" ");
-        try file.writeAll(arg);
-    }
     try file.writeAll("\n");
+}
+
+fn loadHistory(alloc: std.mem.Allocator) !std.ArrayList([]const u8) {
+    var lines = std.ArrayList([]const u8).init(alloc);
+    errdefer lines.deinit();
+
+    const buff = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
+    defer alloc.free(buff);
+    var splitIterator = std.mem.splitScalar(u8, buff, '\n');
+
+    while (splitIterator.next()) |line| {
+        try lines.append(line);
+    }
+
+    return lines;
 }
 
 fn executePipeCmds() !void {}
@@ -45,11 +56,20 @@ pub fn main() !void {
 
     std.posix.access(hst_path, 0) catch {
         const file = try std.fs.cwd().createFile(hst_path, .{ .read = true });
-        defer file.close();
+        file.close();
     };
 
     const file = try std.fs.cwd().openFile(hst_path, .{ .mode = .read_write });
     defer file.close();
+
+    var history = try loadHistory(alloc);
+    defer {
+        // Free all history strings
+        for (history.items) |item| {
+            alloc.free(item);
+        }
+        history.deinit();
+    }
 
     while (true) {
         try stdout.print("ccshell> ", .{});
@@ -59,6 +79,7 @@ pub fn main() !void {
         const user_input = try stdin.readUntilDelimiter(&buffer, '\n');
 
         const trim_inp = std.mem.trim(u8, user_input, "\r\n");
+        try writeToFile(file, trim_inp);
         var token_iter = std.mem.tokenizeSequence(u8, trim_inp, "|");
 
         const cmds = token_iter.next().?;
@@ -74,14 +95,12 @@ pub fn main() !void {
         var args = cmds_iter.rest();
 
         if (std.mem.eql(u8, cmd, "exit")) {
-            try writeToFile(file, cmd, args);
             std.posix.exit(0);
         } else if (std.mem.eql(u8, cmd, "cd")) {
             const home: []const u8 = "HOME";
             if (std.mem.eql(u8, args, "~")) {
                 args = std.posix.getenv(home) orelse "";
             }
-            try writeToFile(file, cmd, args);
             std.posix.chdir(args) catch {
                 try stdout.print("{s}: No such file or directory\n", .{args});
             };
@@ -90,12 +109,10 @@ pub fn main() !void {
             const pwd = try std.process.getCwd(&buff);
 
             try stdout.print("{s}\n", .{pwd});
-            try writeToFile(file, cmd, args);
         } else if (std.mem.eql(u8, cmd, "ls")) {
             if (args.len == 0) {
                 var dir = try std.fs.cwd().openDir(".", .{ .iterate = true });
                 var iter = dir.iterate();
-                try writeToFile(file, cmd, args);
 
                 while (try iter.next()) |entry| {
                     if (entry.name.len > 0 and entry.name[0] == '.') {
@@ -105,11 +122,14 @@ pub fn main() !void {
                 }
                 try stdout.print("\n", .{});
             } else {
-                try writeToFile(file, cmd, args);
                 try runExternalCmd(alloc, cmd, args);
             }
+        } else if (std.mem.eql(u8, cmd, "history")) {
+            const buff = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
+            defer alloc.free(buff);
+
+            try stdout.print("{s}\n", .{buff});
         } else {
-            try writeToFile(file, cmd, args);
             try runExternalCmd(alloc, cmd, args);
         }
     }
