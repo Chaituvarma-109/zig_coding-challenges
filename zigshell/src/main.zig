@@ -46,8 +46,11 @@ fn loadHistory(alloc: std.mem.Allocator) !std.ArrayList([]const u8) {
 
     return lines;
 }
-
-fn executePipeCmds() !void {}
+// cut -f2 -d, fourchords.csv | uniq | wc -l
+fn executePipeCmds(inp: []const u8) !void {
+    std.debug.print("in executePipeCmds func...!!!\n", .{});
+    std.debug.print("{s}\n", .{inp});
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -80,16 +83,12 @@ pub fn main() !void {
 
         const trim_inp = std.mem.trim(u8, user_input, "\r\n");
         try writeToFile(file, trim_inp);
-        var token_iter = std.mem.tokenizeSequence(u8, trim_inp, "|");
 
-        const cmds = token_iter.next().?;
-        const rest_cmds = token_iter.rest();
-
-        if (rest_cmds.len != 0) {
-            try executePipeCmds();
+        if (std.mem.count(u8, trim_inp, "|") > 0) {
+            try executePipeCmds(trim_inp);
         }
 
-        var cmds_iter = std.mem.tokenizeScalar(u8, cmds, ' ');
+        var cmds_iter = std.mem.tokenizeScalar(u8, trim_inp, ' ');
 
         const cmd = cmds_iter.next().?;
         var args = cmds_iter.rest();
