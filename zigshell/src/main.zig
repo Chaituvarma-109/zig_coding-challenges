@@ -1,12 +1,37 @@
 const std = @import("std");
+const csig = @cImport({
+    // @cDefine("_NO_CRT_STDIO_INLINE", "1");
+    @cInclude("signal.h");
+});
 
 const stdout = std.io.getStdOut().writer();
 const hst_path: []const u8 = ".shell_history";
 
+fn sigintHandler(signal: c_int) callconv(.C) void {
+    _ = signal;
+    stdout.print("\nccshell> ", .{}) catch {};
+}
+
+fn setupSignalHandlers() void {
+    // Set up SIGINT handler
+    _ = csig.signal(csig.SIGINT, sigintHandler);
+}
+
+fn restoreDefaultSignalHandlers() void {
+    // Restore default SIGINT handler
+    _ = csig.signal(csig.SIGINT, csig.SIG_DFL);
+}
+
 fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, args: []const u8) !void {
     if (try typeBuilt(alloc, cmd)) |p| {
         defer alloc.free(p);
+
+        restoreDefaultSignalHandlers();
+
         const res = try std.process.Child.run(.{ .allocator = alloc, .argv = &[_][]const u8{ p, args } });
+
+        setupSignalHandlers();
+
         try stdout.print("{s}", .{res.stdout});
     } else {
         try stdout.print("{s}: command not found\n", .{cmd});
@@ -47,15 +72,18 @@ fn loadHistory(alloc: std.mem.Allocator) !std.ArrayList([]const u8) {
     return lines;
 }
 // cut -f2 -d, fourchords.csv | uniq | wc -l
-fn executePipeCmds(inp: []const u8) !void {
-    std.debug.print("in executePipeCmds func...!!!\n", .{});
-    std.debug.print("{s}\n", .{inp});
+fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
+    // TODO
+    _ = alloc;
+    _ = inp;
 }
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
     defer _ = gpa.deinit();
+
+    setupSignalHandlers();
 
     std.posix.access(hst_path, 0) catch {
         const file = try std.fs.cwd().createFile(hst_path, .{ .read = true });
@@ -79,13 +107,15 @@ pub fn main() !void {
 
         const stdin = std.io.getStdIn().reader();
         var buffer: [1024]u8 = undefined;
-        const user_input = try stdin.readUntilDelimiter(&buffer, '\n');
+        const user_input = stdin.readUntilDelimiter(&buffer, '\n') catch {
+            continue;
+        };
 
         const trim_inp = std.mem.trim(u8, user_input, "\r\n");
         try writeToFile(file, trim_inp);
 
         if (std.mem.count(u8, trim_inp, "|") > 0) {
-            try executePipeCmds(trim_inp);
+            try executePipeCmds(alloc, trim_inp);
         }
 
         var cmds_iter = std.mem.tokenizeScalar(u8, trim_inp, ' ');
@@ -104,7 +134,7 @@ pub fn main() !void {
                 try stdout.print("{s}: No such file or directory\n", .{args});
             };
         } else if (std.mem.eql(u8, cmd, "pwd")) {
-            var buff: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            var buff: [std.fs.max_path_bytes]u8 = undefined;
             const pwd = try std.process.getCwd(&buff);
 
             try stdout.print("{s}\n", .{pwd});
