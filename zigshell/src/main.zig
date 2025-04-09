@@ -1,8 +1,4 @@
 const std = @import("std");
-// const csig = @cImport({
-//     // @cDefine("_NO_CRT_STDIO_INLINE", "1");
-//     @cInclude("signal.h");
-// });
 
 const stdout = std.io.getStdOut().writer();
 const hst_path: []const u8 = ".shell_history";
@@ -23,7 +19,7 @@ fn setupSignalHandlers() !void {
     };
 
     // Install our handler and save the original one
-    _ = std.posix.sigaction(std.posix.SIG.INT, &act, &orig_sigint_action);
+    _ = std.posix.sigaction(std.posix.SIG.INT, &act, null);
 }
 
 fn restoreDefaultSignalHandlers() !void {
@@ -31,37 +27,11 @@ fn restoreDefaultSignalHandlers() !void {
     const act = std.posix.Sigaction{ // std.os.linux.Sigaction
         .handler = .{ .handler = std.posix.SIG.DFL }, // std.os.linux.SIG.DFL
         .mask = std.posix.empty_sigset, // std.os.linux.empty_sigset
-        .flags = 0,
+        .flags = std.os.linux.SA.RESTART, // 0
     };
 
     _ = std.posix.sigaction(std.posix.SIG.INT, &act, null);
 }
-
-fn reinstateCustomSignalHandlers() !void {
-    // Reinstall our custom handler
-    const act = std.posix.Sigaction{ // std.os.linux.Sigaction
-        .handler = .{ .handler = sigintHandler },
-        .mask = std.posix.empty_sigset, // std.os.linux.empty_sigset
-        .flags = std.os.linux.SA.RESTART,
-    };
-
-    _ = std.posix.sigaction(std.posix.SIG.INT, &act, null);
-}
-
-// fn sigintHandler(signal: c_int) callconv(.C) void {
-//     _ = signal;
-//     stdout.print("\nccshell> ", .{}) catch {};
-// }
-
-// fn setupSignalHandlers() void {
-//     // Set up SIGINT handler
-//     _ = csig.signal(csig.SIGINT, sigintHandler);
-// }
-
-// fn restoreDefaultSignalHandlers() void {
-//     // Restore default SIGINT handler
-//     _ = csig.signal(csig.SIGINT, csig.SIG_DFL);
-// }
 
 fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, args: []const u8) !void {
     if (try typeBuilt(alloc, cmd)) |p| {
@@ -71,7 +41,7 @@ fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, args: []const u8) !
 
         const res = try std.process.Child.run(.{ .allocator = alloc, .argv = &[_][]const u8{ p, args } });
 
-        try reinstateCustomSignalHandlers();
+        try setupSignalHandlers();
 
         try stdout.print("{s}", .{res.stdout});
     } else {
