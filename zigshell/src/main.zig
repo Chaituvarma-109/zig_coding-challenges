@@ -7,7 +7,7 @@ const std = @import("std");
 const stdout = std.io.getStdOut().writer();
 const hst_path: []const u8 = ".shell_history";
 
-var orig_sigint_action: std.posix.Sigaction = undefined;
+var orig_sigint_action: std.posix.Sigaction = undefined; // std.os.linux.Sigaction
 
 fn sigintHandler(sig: c_int) callconv(.C) void {
     _ = sig;
@@ -16,10 +16,10 @@ fn sigintHandler(sig: c_int) callconv(.C) void {
 
 fn setupSignalHandlers() !void {
     // Set up our custom SIGINT handler
-    const act = std.posix.Sigaction{
+    const act = std.posix.Sigaction{ // std.os.linux.Sigaction
         .handler = .{ .handler = sigintHandler },
-        .mask = std.os.linux.empty_sigset,
-        .flags = std.os.linux.SA.RESTART,
+        .mask = std.posix.empty_sigset, // std.os.linux.empty_sigset
+        .flags = std.os.linux.SA.RESTART, // 0
     };
 
     // Install our handler and save the original one
@@ -28,10 +28,10 @@ fn setupSignalHandlers() !void {
 
 fn restoreDefaultSignalHandlers() !void {
     // Use SIG_DFL (default handler)
-    const act = std.posix.Sigaction{
-        .handler = .{ .handler = std.posix.SIG.DFL },
-        .mask = std.os.linux.empty_sigset,
-        .flags = std.os.linux.SA.RESTART,
+    const act = std.posix.Sigaction{ // std.os.linux.Sigaction
+        .handler = .{ .handler = std.posix.SIG.DFL }, // std.os.linux.SIG.DFL
+        .mask = std.posix.empty_sigset, // std.os.linux.empty_sigset
+        .flags = 0,
     };
 
     _ = std.posix.sigaction(std.posix.SIG.INT, &act, null);
@@ -39,9 +39,9 @@ fn restoreDefaultSignalHandlers() !void {
 
 fn reinstateCustomSignalHandlers() !void {
     // Reinstall our custom handler
-    const act = std.posix.Sigaction{
+    const act = std.posix.Sigaction{ // std.os.linux.Sigaction
         .handler = .{ .handler = sigintHandler },
-        .mask = std.os.linux.empty_sigset,
+        .mask = std.posix.empty_sigset, // std.os.linux.empty_sigset
         .flags = std.os.linux.SA.RESTART,
     };
 
