@@ -1,36 +1,77 @@
 const std = @import("std");
-const csig = @cImport({
-    // @cDefine("_NO_CRT_STDIO_INLINE", "1");
-    @cInclude("signal.h");
-});
+// const csig = @cImport({
+//     // @cDefine("_NO_CRT_STDIO_INLINE", "1");
+//     @cInclude("signal.h");
+// });
 
 const stdout = std.io.getStdOut().writer();
 const hst_path: []const u8 = ".shell_history";
 
-fn sigintHandler(signal: c_int) callconv(.C) void {
-    _ = signal;
+var orig_sigint_action: std.posix.Sigaction = undefined;
+
+fn sigintHandler(sig: c_int) callconv(.C) void {
+    _ = sig;
     stdout.print("\nccshell> ", .{}) catch {};
 }
 
-fn setupSignalHandlers() void {
-    // Set up SIGINT handler
-    _ = csig.signal(csig.SIGINT, sigintHandler);
+fn setupSignalHandlers() !void {
+    // Set up our custom SIGINT handler
+    const act = std.posix.Sigaction{
+        .handler = .{ .handler = sigintHandler },
+        .mask = std.os.linux.empty_sigset,
+        .flags = std.os.linux.SA.RESTART,
+    };
+
+    // Install our handler and save the original one
+    _ = std.posix.sigaction(std.posix.SIG.INT, &act, &orig_sigint_action);
 }
 
-fn restoreDefaultSignalHandlers() void {
-    // Restore default SIGINT handler
-    _ = csig.signal(csig.SIGINT, csig.SIG_DFL);
+fn restoreDefaultSignalHandlers() !void {
+    // Use SIG_DFL (default handler)
+    const act = std.posix.Sigaction{
+        .handler = .{ .handler = std.posix.SIG.DFL },
+        .mask = std.os.linux.empty_sigset,
+        .flags = std.os.linux.SA.RESTART,
+    };
+
+    _ = std.posix.sigaction(std.posix.SIG.INT, &act, null);
 }
+
+fn reinstateCustomSignalHandlers() !void {
+    // Reinstall our custom handler
+    const act = std.posix.Sigaction{
+        .handler = .{ .handler = sigintHandler },
+        .mask = std.os.linux.empty_sigset,
+        .flags = std.os.linux.SA.RESTART,
+    };
+
+    _ = std.posix.sigaction(std.posix.SIG.INT, &act, null);
+}
+
+// fn sigintHandler(signal: c_int) callconv(.C) void {
+//     _ = signal;
+//     stdout.print("\nccshell> ", .{}) catch {};
+// }
+
+// fn setupSignalHandlers() void {
+//     // Set up SIGINT handler
+//     _ = csig.signal(csig.SIGINT, sigintHandler);
+// }
+
+// fn restoreDefaultSignalHandlers() void {
+//     // Restore default SIGINT handler
+//     _ = csig.signal(csig.SIGINT, csig.SIG_DFL);
+// }
 
 fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, args: []const u8) !void {
     if (try typeBuilt(alloc, cmd)) |p| {
         defer alloc.free(p);
 
-        restoreDefaultSignalHandlers();
+        try restoreDefaultSignalHandlers();
 
         const res = try std.process.Child.run(.{ .allocator = alloc, .argv = &[_][]const u8{ p, args } });
 
-        setupSignalHandlers();
+        try reinstateCustomSignalHandlers();
 
         try stdout.print("{s}", .{res.stdout});
     } else {
@@ -83,7 +124,7 @@ pub fn main() !void {
     const alloc = gpa.allocator();
     defer _ = gpa.deinit();
 
-    setupSignalHandlers();
+    try setupSignalHandlers();
 
     std.posix.access(hst_path, 0) catch {
         const file = try std.fs.cwd().createFile(hst_path, .{ .read = true });
