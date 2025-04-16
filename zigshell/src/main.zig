@@ -81,11 +81,188 @@ fn loadHistory(alloc: std.mem.Allocator) !std.ArrayList([]const u8) {
 
     return lines;
 }
+
+fn parseCommand(alloc: std.mem.Allocator, command_str: []const u8) ![][]const u8 {
+    var args = std.ArrayList([]const u8).init(alloc);
+    errdefer {
+        for (args.items) |item| {
+            alloc.free(item);
+        }
+        args.deinit();
+    }
+
+    var tokens_iter = std.mem.tokenizeScalar(u8, command_str, ' ');
+    while (tokens_iter.next()) |token| {
+        const arg_copy = try alloc.dupe(u8, token);
+        try args.append(arg_copy);
+    }
+
+    return args.toOwnedSlice();
+}
 // cat test.txt | wc -l
 fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
-    // TODO
-    _ = alloc;
-    _ = inp;
+    var commands = std.ArrayList([]const u8).init(alloc);
+    defer commands.deinit();
+
+    var cmd_iter = std.mem.splitScalar(u8, inp, '|');
+    while (cmd_iter.next()) |cmd| {
+        const trimmed_cmd = std.mem.trim(u8, cmd, " \t\r\n");
+        try commands.append(trimmed_cmd);
+    }
+
+    if (commands.items.len == 0) return;
+
+    try restoreDefaultSignalHandlers();
+    defer setupSignalHandlers() catch {};
+
+    // Single command case - no need for pipes
+    if (commands.items.len == 1) {
+        var args = try parseCommand(alloc, commands.items[0]);
+        defer {
+            for (args) |arg| {
+                alloc.free(arg);
+            }
+            alloc.free(args);
+        }
+
+        if (args.len == 0) return;
+
+        const cmd_path = try typeBuilt(alloc, args[0]) orelse {
+            try stdout.print("{s}: command not found\n", .{args[0]});
+            return;
+        };
+        defer alloc.free(cmd_path);
+
+        var argv = try alloc.alloc([]const u8, args.len);
+        defer alloc.free(argv);
+
+        argv[0] = cmd_path;
+        for (args[1..], 1..) |arg, j| {
+            argv[j] = arg;
+        }
+
+        const result = try std.process.Child.run(.{
+            .allocator = alloc,
+            .argv = argv,
+        });
+        try stdout.print("{s}", .{result.stdout});
+        return;
+    }
+
+    // Multiple commands with pipes
+    const pipes_count = commands.items.len - 1;
+    var pipes = try alloc.alloc([2]std.posix.fd_t, pipes_count);
+    defer alloc.free(pipes);
+
+    // Create all pipes
+    for (0..pipes_count) |i| {
+        const new_pipe = try std.posix.pipe();
+        pipes[i][0] = new_pipe[0];
+        pipes[i][1] = new_pipe[1];
+    }
+
+    var pids = try alloc.alloc(std.posix.pid_t, commands.items.len);
+    defer alloc.free(pids);
+
+    // Create all child processes
+    for (commands.items, 0..) |cmd_str, i| {
+        const pid = try std.posix.fork();
+
+        if (pid == 0) {
+            // Child process
+
+            // Set up pipes
+            if (i == 0) {
+                // First command: close all read ends, and set up stdout
+                for (0..pipes_count) |j| {
+                    if (j != i) {
+                        std.posix.close(pipes[j][1]);
+                    }
+                    std.posix.close(pipes[j][0]);
+                }
+
+                // Redirect stdout to write end of pipe
+                std.posix.dup2(pipes[i][1], std.posix.STDOUT_FILENO) catch unreachable;
+                std.posix.close(pipes[i][1]);
+            } else if (i == commands.items.len - 1) {
+                // Last command: close all write ends, set up stdin
+                for (0..pipes_count) |j| {
+                    std.posix.close(pipes[j][1]);
+                    if (j != i - 1) {
+                        std.posix.close(pipes[j][0]);
+                    }
+                }
+
+                // Redirect stdin to read end of previous pipe
+                std.posix.dup2(pipes[i - 1][0], std.posix.STDIN_FILENO) catch unreachable;
+                std.posix.close(pipes[i - 1][0]);
+            } else {
+                // Middle command: set up stdin from previous, stdout to next
+                for (0..pipes_count) |j| {
+                    if (j != i) {
+                        std.posix.close(pipes[j][1]);
+                    }
+                    if (j != i - 1) {
+                        std.posix.close(pipes[j][0]);
+                    }
+                }
+
+                // Redirect stdin from previous pipe
+                std.posix.dup2(pipes[i - 1][0], std.posix.STDIN_FILENO) catch unreachable;
+                std.posix.close(pipes[i - 1][0]);
+
+                // Redirect stdout to next pipe
+                std.posix.dup2(pipes[i][1], std.posix.STDOUT_FILENO) catch unreachable;
+                std.posix.close(pipes[i][1]);
+            }
+
+            // Parse and execute the command
+            var args = parseCommand(alloc, cmd_str) catch |err| {
+                std.debug.print("Failed to parse command: {}\n", .{err});
+                std.posix.exit(1);
+            };
+
+            if (args.len == 0) {
+                std.posix.exit(1);
+            }
+
+            const cmd_path = typeBuilt(alloc, args[0]) catch |err| {
+                std.debug.print("Failed to find command: {}\n", .{err});
+                std.posix.exit(1);
+            } orelse {
+                std.debug.print("{s}: command not found\n", .{args[0]});
+                std.posix.exit(1);
+            };
+
+            // Prepare arguments for execve
+            var argv = alloc.alloc([]const u8, args.len) catch unreachable;
+            argv[0] = cmd_path;
+            for (args[1..], 1..) |arg, j| {
+                argv[j] = arg;
+            }
+
+            const exec_error = std.process.execv(alloc, argv);
+            if (exec_error != error.Success) {
+                std.debug.print("execv failed: {}\n", .{exec_error});
+                std.posix.exit(1);
+            }
+        } else {
+            // Parent process
+            pids[i] = pid;
+        }
+    }
+
+    // Close all pipe ends in the parent
+    for (pipes) |pipe| {
+        std.posix.close(pipe[0]);
+        std.posix.close(pipe[1]);
+    }
+
+    // Wait for all child processes
+    for (pids) |pid| {
+        const status: u32 = 0;
+        _ = std.posix.waitpid(pid, status);
+    }
 }
 
 pub fn main() !void {
@@ -125,6 +302,7 @@ pub fn main() !void {
 
         if (std.mem.count(u8, trim_inp, "|") > 0) {
             try executePipeCmds(alloc, trim_inp);
+            continue;
         }
 
         var cmds_iter = std.mem.tokenizeScalar(u8, trim_inp, ' ');
