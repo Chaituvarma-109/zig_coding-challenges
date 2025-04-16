@@ -115,40 +115,6 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
     try restoreDefaultSignalHandlers();
     defer setupSignalHandlers() catch {};
 
-    // Single command case - no need for pipes
-    if (commands.items.len == 1) {
-        var args = try parseCommand(alloc, commands.items[0]);
-        defer {
-            for (args) |arg| {
-                alloc.free(arg);
-            }
-            alloc.free(args);
-        }
-
-        if (args.len == 0) return;
-
-        const cmd_path = try typeBuilt(alloc, args[0]) orelse {
-            try stdout.print("{s}: command not found\n", .{args[0]});
-            return;
-        };
-        defer alloc.free(cmd_path);
-
-        var argv = try alloc.alloc([]const u8, args.len);
-        defer alloc.free(argv);
-
-        argv[0] = cmd_path;
-        for (args[1..], 1..) |arg, j| {
-            argv[j] = arg;
-        }
-
-        const result = try std.process.Child.run(.{
-            .allocator = alloc,
-            .argv = argv,
-        });
-        try stdout.print("{s}", .{result.stdout});
-        return;
-    }
-
     // Multiple commands with pipes
     const pipes_count = commands.items.len - 1;
     var pipes = try alloc.alloc([2]std.posix.fd_t, pipes_count);
