@@ -1,9 +1,8 @@
 const std = @import("std");
 
 const stdout = std.io.getStdOut().writer();
+const stdin = std.io.getStdIn().reader();
 const hst_path: []const u8 = ".shell_history";
-
-var orig_sigint_action: std.posix.Sigaction = undefined; // std.os.linux.Sigaction
 
 fn sigintHandler(sig: c_int) callconv(.C) void {
     _ = sig;
@@ -82,7 +81,7 @@ fn loadHistory(alloc: std.mem.Allocator) !std.ArrayList([]const u8) {
 
     return lines;
 }
-// cut -f2 -d, fourchords.csv | uniq | wc -l
+// cat test.txt | wc -l
 fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
     // TODO
     _ = alloc;
@@ -116,7 +115,6 @@ pub fn main() !void {
     while (true) {
         try stdout.print("ccshell> ", .{});
 
-        const stdin = std.io.getStdIn().reader();
         var buffer: [1024]u8 = undefined;
         const user_input = stdin.readUntilDelimiter(&buffer, '\n') catch {
             continue;
@@ -168,7 +166,7 @@ pub fn main() !void {
             const buff = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
             defer alloc.free(buff);
 
-            try stdout.print("{s}\n", .{buff});
+            try stdout.print("{s}\n", .{buff[0 .. buff.len - 1]});
         } else {
             try runExternalCmd(alloc, cmd, args);
         }
