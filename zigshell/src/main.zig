@@ -1,4 +1,4 @@
-const std = @import("std");
+const std: type = @import("std");
 
 const stdout = std.io.getStdOut().writer();
 const stdin = std.io.getStdIn().reader();
@@ -38,7 +38,7 @@ fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, args: []const u8) !
 
         try restoreDefaultSignalHandlers();
 
-        const res = try std.process.Child.run(.{ .allocator = alloc, .argv = &[_][]const u8{ p, args } });
+        const res: std.process.Child.RunResult = try std.process.Child.run(.{ .allocator = alloc, .argv = &[_][]const u8{ p, args } });
 
         try setupSignalHandlers();
 
@@ -71,7 +71,7 @@ fn loadHistory(alloc: std.mem.Allocator) !std.ArrayList([]const u8) {
     var lines = std.ArrayList([]const u8).init(alloc);
     errdefer lines.deinit();
 
-    const buff = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
+    const buff: []u8 = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
     defer alloc.free(buff);
     var splitIterator = std.mem.splitScalar(u8, buff, '\n');
 
@@ -183,7 +183,7 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
             }
 
             // Parse and execute the command
-            var args = parseCommand(alloc, cmd_str) catch |err| {
+            var args: [][]const u8 = parseCommand(alloc, cmd_str) catch |err| {
                 std.debug.print("Failed to parse command: {}\n", .{err});
                 std.posix.exit(1);
             };
@@ -192,7 +192,7 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
                 std.posix.exit(1);
             }
 
-            const cmd_path = typeBuilt(alloc, args[0]) catch |err| {
+            const cmd_path: []const u8 = typeBuilt(alloc, args[0]) catch |err| {
                 std.debug.print("Failed to find command: {}\n", .{err});
                 std.posix.exit(1);
             } orelse {
@@ -233,17 +233,22 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
-    defer _ = gpa.deinit();
+    const alloc: std.mem.Allocator = gpa.allocator();
+    defer {
+        const check = gpa.deinit();
+        if (check == .leak) {
+            std.debug.print("memory leaked", .{});
+        }
+    }
 
     try setupSignalHandlers();
 
     std.posix.access(hst_path, 0) catch {
-        const file = try std.fs.cwd().createFile(hst_path, .{ .read = true });
+        const file: std.fs.File = try std.fs.cwd().createFile(hst_path, .{ .read = true });
         file.close();
     };
 
-    const file = try std.fs.cwd().openFile(hst_path, .{ .mode = .read_write });
+    const file: std.fs.File = try std.fs.cwd().openFile(hst_path, .{ .mode = .read_write });
     defer file.close();
 
     var history = try loadHistory(alloc);
@@ -259,11 +264,11 @@ pub fn main() !void {
         try stdout.print("ccshell> ", .{});
 
         var buffer: [1024]u8 = undefined;
-        const user_input = stdin.readUntilDelimiter(&buffer, '\n') catch {
+        const user_input: []u8 = stdin.readUntilDelimiter(&buffer, '\n') catch {
             continue;
         };
 
-        const trim_inp = std.mem.trim(u8, user_input, "\r\n");
+        const trim_inp: []const u8 = std.mem.trim(u8, user_input, "\r\n");
         try writeToFile(file, trim_inp);
 
         if (std.mem.count(u8, trim_inp, "|") > 0) {
@@ -273,8 +278,8 @@ pub fn main() !void {
 
         var cmds_iter = std.mem.tokenizeScalar(u8, trim_inp, ' ');
 
-        const cmd = cmds_iter.next().?;
-        var args = cmds_iter.rest();
+        const cmd: []const u8 = cmds_iter.next().?;
+        var args: []const u8 = cmds_iter.rest();
 
         if (std.mem.eql(u8, cmd, "exit")) {
             std.posix.exit(0);
@@ -288,12 +293,13 @@ pub fn main() !void {
             };
         } else if (std.mem.eql(u8, cmd, "pwd")) {
             var buff: [std.fs.max_path_bytes]u8 = undefined;
-            const pwd = try std.process.getCwd(&buff);
+            const pwd: []u8 = try std.process.getCwd(&buff);
 
             try stdout.print("{s}\n", .{pwd});
         } else if (std.mem.eql(u8, cmd, "ls")) {
             if (args.len == 0) {
-                var dir = try std.fs.cwd().openDir(".", .{ .iterate = true });
+                var dir: std.fs.Dir = try std.fs.cwd().openDir(".", .{ .iterate = true });
+                defer dir.close();
                 var iter = dir.iterate();
 
                 while (try iter.next()) |entry| {
@@ -307,7 +313,7 @@ pub fn main() !void {
                 try runExternalCmd(alloc, cmd, args);
             }
         } else if (std.mem.eql(u8, cmd, "history")) {
-            const buff = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
+            const buff: []u8 = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
             defer alloc.free(buff);
 
             try stdout.print("{s}\n", .{buff[0 .. buff.len - 1]});
