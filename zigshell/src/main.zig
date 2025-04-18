@@ -37,9 +37,7 @@ fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, args: []const u8) !
         defer alloc.free(p);
 
         try restoreDefaultSignalHandlers();
-
         const res: std.process.Child.RunResult = try std.process.Child.run(.{ .allocator = alloc, .argv = &[_][]const u8{ p, args } });
-
         try setupSignalHandlers();
 
         try stdout.print("{s}", .{res.stdout});
@@ -183,7 +181,7 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
             }
 
             // Parse and execute the command
-            var args: [][]const u8 = parseCommand(alloc, cmd_str) catch |err| {
+            const args: [][]const u8 = parseCommand(alloc, cmd_str) catch |err| {
                 std.debug.print("Failed to parse command: {}\n", .{err});
                 std.posix.exit(1);
             };
@@ -192,22 +190,7 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
                 std.posix.exit(1);
             }
 
-            const cmd_path: []const u8 = typeBuilt(alloc, args[0]) catch |err| {
-                std.debug.print("Failed to find command: {}\n", .{err});
-                std.posix.exit(1);
-            } orelse {
-                std.debug.print("{s}: command not found\n", .{args[0]});
-                std.posix.exit(1);
-            };
-
-            // Prepare arguments for execve
-            var argv = alloc.alloc([]const u8, args.len) catch unreachable;
-            argv[0] = cmd_path;
-            for (args[1..], 1..) |arg, j| {
-                argv[j] = arg;
-            }
-
-            const exec_error = std.process.execv(alloc, argv);
+            const exec_error = std.process.execv(alloc, args);
             if (exec_error != error.Success) {
                 std.debug.print("execv failed: {}\n", .{exec_error});
                 std.posix.exit(1);
