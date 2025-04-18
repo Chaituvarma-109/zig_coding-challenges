@@ -160,6 +160,9 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
                 // Redirect stdin to read end of previous pipe
                 std.posix.dup2(pipes[i - 1][0], std.posix.STDIN_FILENO) catch unreachable;
                 std.posix.close(pipes[i - 1][0]);
+
+                // stdout is properly directed to terminal
+                std.posix.dup2(std.posix.STDOUT_FILENO, std.posix.STDOUT_FILENO) catch unreachable;
             } else {
                 // Middle command: set up stdin from previous, stdout to next
                 for (0..pipes_count) |j| {
@@ -209,8 +212,7 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
 
     // Wait for all child processes
     for (pids) |pid| {
-        const status: u32 = 0;
-        _ = std.posix.waitpid(pid, status);
+        _ = std.posix.waitpid(pid, 0);
     }
 }
 
