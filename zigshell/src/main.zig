@@ -36,8 +36,19 @@ fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, args: []const u8) !
     if (try typeBuilt(alloc, cmd)) |p| {
         defer alloc.free(p);
 
+        var argv = std.ArrayList([]const u8).init(alloc);
+        defer argv.deinit();
+
+        try argv.append(p);
+
+        if (args.len > 0) {
+            var args_iter = std.mem.tokenizeScalar(u8, args, ' ');
+            while (args_iter.next()) |arg| {
+                try argv.append(arg);
+            }
+        }
         try restoreDefaultSignalHandlers();
-        const res: std.process.Child.RunResult = try std.process.Child.run(.{ .allocator = alloc, .argv = &[_][]const u8{ p, args } });
+        const res = try std.process.Child.run(.{ .allocator = alloc, .argv = argv.items });
         try setupSignalHandlers();
 
         try stdout.print("{s}", .{res.stdout});

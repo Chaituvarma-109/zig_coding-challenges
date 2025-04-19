@@ -1,5 +1,3 @@
 .zig-cache/
 zig-out/
 .shell_history
-src/temp.zig
-src/t.txt
