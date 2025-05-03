@@ -78,20 +78,27 @@ fn writeToFile(file: std.fs.File, cmd: []const u8) !void {
 
 fn loadHistory(alloc: std.mem.Allocator) !std.ArrayList([]const u8) {
     var lines = std.ArrayList([]const u8).init(alloc);
-    errdefer lines.deinit();
+    errdefer {
+        for (lines.items) |item| {
+            alloc.free(item);
+        }
+        lines.deinit();
+    }
 
     const buff: []u8 = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
     defer alloc.free(buff);
     var splitIterator = std.mem.splitScalar(u8, buff, '\n');
 
     while (splitIterator.next()) |line| {
-        try lines.append(line);
+        const dup = try alloc.dupe(u8, line);
+        defer alloc.free(dup);
+        try lines.append(dup);
     }
 
     return lines;
 }
 
-fn parseCommand(alloc: std.mem.Allocator, command_str: []const u8) ![][]const u8 {
+fn parseCommand(alloc: std.mem.Allocator, cmd_str: []const u8) ![][]const u8 {
     var args = std.ArrayList([]const u8).init(alloc);
     errdefer {
         for (args.items) |item| {
@@ -100,7 +107,7 @@ fn parseCommand(alloc: std.mem.Allocator, command_str: []const u8) ![][]const u8
         args.deinit();
     }
 
-    var tokens_iter = std.mem.tokenizeScalar(u8, command_str, ' ');
+    var tokens_iter = std.mem.tokenizeScalar(u8, cmd_str, ' ');
     while (tokens_iter.next()) |token| {
         const arg_copy = try alloc.dupe(u8, token);
         try args.append(arg_copy);
@@ -227,6 +234,10 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
     }
 }
 
+fn handleEcho(args: []const u8) !void {
+    _ = args;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc: std.mem.Allocator = gpa.allocator();
@@ -279,6 +290,8 @@ pub fn main() !void {
 
         if (std.mem.eql(u8, cmd, "exit")) {
             std.posix.exit(0);
+        } else if (std.mem.eql(u8, cmd, "echo")) {
+            try handleEcho(args);
         } else if (std.mem.eql(u8, cmd, "cd")) {
             const home: []const u8 = "HOME";
             if (std.mem.eql(u8, args, "~")) {
