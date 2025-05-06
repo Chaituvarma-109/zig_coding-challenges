@@ -49,6 +49,10 @@ fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, args: []const u8) !
         }
         try restoreDefaultSignalHandlers();
         const res = try std.process.Child.run(.{ .allocator = alloc, .argv = argv.items });
+        defer {
+            alloc.free(res.stdout);
+            alloc.free(res.stderr);
+        }
         try setupSignalHandlers();
 
         try stdout.print("{s}", .{res.stdout});
@@ -63,7 +67,10 @@ fn typeBuilt(alloc: std.mem.Allocator, args: []const u8) !?[]const u8 {
 
     while (folders.next()) |folder| {
         const full_path = try std.fs.path.join(alloc, &[_][]const u8{ folder, args });
-        std.fs.accessAbsolute(full_path, .{ .mode = .read_only }) catch continue;
+        std.fs.accessAbsolute(full_path, .{ .mode = .read_only }) catch {
+            defer alloc.free(full_path);
+            continue;
+        };
         return full_path;
     }
 
@@ -76,26 +83,20 @@ fn writeToFile(file: std.fs.File, cmd: []const u8) !void {
     try file.writeAll("\n");
 }
 
-fn loadHistory(alloc: std.mem.Allocator) !std.ArrayList([]const u8) {
+fn loadHistory(alloc: std.mem.Allocator) ![][]const u8 {
     var lines = std.ArrayList([]const u8).init(alloc);
-    errdefer {
-        for (lines.items) |item| {
-            alloc.free(item);
-        }
-        lines.deinit();
-    }
+    defer lines.deinit();
 
     const buff: []u8 = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
     defer alloc.free(buff);
     var splitIterator = std.mem.splitScalar(u8, buff, '\n');
 
     while (splitIterator.next()) |line| {
-        const dup = try alloc.dupe(u8, line);
-        defer alloc.free(dup);
-        try lines.append(dup);
+        const duped = try alloc.dupe(u8, line);
+        try lines.append(duped);
     }
 
-    return lines;
+    return lines.toOwnedSlice();
 }
 
 fn parseCommand(alloc: std.mem.Allocator, cmd_str: []const u8) ![][]const u8 {
@@ -241,12 +242,7 @@ fn handleEcho(args: []const u8) !void {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc: std.mem.Allocator = gpa.allocator();
-    defer {
-        const check = gpa.deinit();
-        if (check == .leak) {
-            std.debug.print("memory leaked", .{});
-        }
-    }
+    defer _ = gpa.deinit();
 
     try setupSignalHandlers();
 
@@ -258,13 +254,13 @@ pub fn main() !void {
     const file: std.fs.File = try std.fs.cwd().openFile(hst_path, .{ .mode = .read_write });
     defer file.close();
 
-    var history = try loadHistory(alloc);
+    const history = try loadHistory(alloc);
     defer {
         // Free all history strings
-        for (history.items) |item| {
+        for (history) |item| {
             alloc.free(item);
         }
-        history.deinit();
+        alloc.free(history);
     }
 
     while (true) {
@@ -328,6 +324,14 @@ pub fn main() !void {
             try stdout.print("{s}\n", .{buff[0 .. buff.len - 1]});
         } else {
             try runExternalCmd(alloc, cmd, args);
+        }
+    }
+
+    defer {
+        if (gpa.detectLeaks()) {
+            std.debug.print("Memory leak detected!\n", .{});
+        } else {
+            std.debug.print("No leaks!\n", .{});
         }
     }
 }
