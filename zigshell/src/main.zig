@@ -1,8 +1,17 @@
 const std: type = @import("std");
+const clib = @cImport({
+    @cInclude("stdio.h");
+    @cInclude("stdlib.h");
+    @cInclude("string.h");
+    @cInclude("readline/readline.h");
+    @cInclude("readline/history.h");
+});
 
 const stdout = std.io.getStdOut().writer();
 const stdin = std.io.getStdIn().reader();
 const hst_path: []const u8 = ".shell_history";
+
+const builtins = [_][]const u8{ "exit", "echo", "pwd" };
 
 fn sigintHandler(sig: c_int) callconv(.C) void {
     _ = sig;
@@ -83,21 +92,21 @@ fn writeToFile(file: std.fs.File, cmd: []const u8) !void {
     try file.writeAll("\n");
 }
 
-fn loadHistory(alloc: std.mem.Allocator) ![][]const u8 {
-    var lines = std.ArrayList([]const u8).init(alloc);
-    defer lines.deinit();
+// fn loadHistory(alloc: std.mem.Allocator) ![][]const u8 {
+//     var lines = std.ArrayList([]const u8).init(alloc);
+//     defer lines.deinit();
 
-    const buff: []u8 = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
-    defer alloc.free(buff);
-    var splitIterator = std.mem.splitScalar(u8, buff, '\n');
+//     const buff: []u8 = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
+//     defer alloc.free(buff);
+//     var splitIterator = std.mem.splitScalar(u8, buff, '\n');
 
-    while (splitIterator.next()) |line| {
-        const duped = try alloc.dupe(u8, line);
-        try lines.append(duped);
-    }
+//     while (splitIterator.next()) |line| {
+//         const duped = try alloc.dupe(u8, line);
+//         try lines.append(duped);
+//     }
 
-    return lines.toOwnedSlice();
-}
+//     return lines.toOwnedSlice();
+// }
 
 fn parseCommand(alloc: std.mem.Allocator, cmd_str: []const u8) ![][]const u8 {
     var args = std.ArrayList([]const u8).init(alloc);
@@ -239,6 +248,37 @@ fn handleEcho(args: []const u8) !void {
     _ = args;
 }
 
+fn completion(text: [*c]const u8, start: c_int, _: c_int) callconv(.c) [*c][*c]u8 {
+    var matches: [*c][*c]u8 = null;
+
+    if (start == 0) {
+        matches = clib.rl_completion_matches(text, &custom_completion);
+    }
+    return matches;
+}
+
+var completion_index: usize = undefined;
+var text_len: usize = undefined;
+fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
+    if (state == 0) {
+        completion_index = 0;
+        text_len = std.mem.len(text);
+    }
+
+    const txt = text[0..text_len];
+
+    while (completion_index < builtins.len) {
+        const builtin_name = builtins[completion_index];
+        completion_index += 1;
+
+        if (std.mem.startsWith(u8, builtin_name, txt)) {
+            return clib.strdup(builtin_name.ptr);
+        }
+    }
+
+    return null;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc: std.mem.Allocator = gpa.allocator();
@@ -254,24 +294,38 @@ pub fn main() !void {
     const file: std.fs.File = try std.fs.cwd().openFile(hst_path, .{ .mode = .read_write });
     defer file.close();
 
-    const history = try loadHistory(alloc);
+    // const history = try loadHistory(alloc);
+    // defer {
+    //     // Free all history strings
+    //     for (history) |item| {
+    //         alloc.free(item);
+    //     }
+    //     alloc.free(history);
+    // }
+    clib.using_history();
+    _ = clib.read_history(".shell_history");
     defer {
-        // Free all history strings
-        for (history) |item| {
-            alloc.free(item);
-        }
-        alloc.free(history);
+        // _ = clib.write_history(".shell_history");
+        clib.clear_history();
     }
 
-    while (true) {
-        try stdout.print("ccshell> ", .{});
+    clib.rl_attempted_completion_function = &completion;
 
-        var buffer: [1024]u8 = undefined;
-        const user_input: []u8 = stdin.readUntilDelimiter(&buffer, '\n') catch {
-            continue;
-        };
+    while (true) {
+        // try stdout.print("ccshell> ", .{});
+
+        // var buffer: [1024]u8 = undefined;
+        // const user_input: []u8 = stdin.readUntilDelimiter(&buffer, '\n') catch {
+        //     continue;
+        // };
+
+        const line = clib.readline("ccshell> ");
+        defer clib.free(line);
+        const ln_len = std.mem.len(line);
+        const user_input: []u8 = line[0..ln_len];
 
         const trim_inp: []const u8 = std.mem.trim(u8, user_input, "\r\n");
+        // clib.add_history(line);
         try writeToFile(file, trim_inp);
 
         if (std.mem.count(u8, trim_inp, "|") > 0) {
