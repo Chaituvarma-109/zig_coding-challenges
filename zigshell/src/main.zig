@@ -116,8 +116,8 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
 
     if (commands.items.len == 0) return;
 
-    // try restoreDefaultSignalHandlers();
-    // defer setupSignalHandlers() catch {};
+    try restoreDefaultSignalHandlers();
+    defer setupSignalHandlers() catch {};
 
     // Multiple commands with pipes
     const pipes_count = commands.items.len - 1;
