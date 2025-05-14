@@ -11,7 +11,7 @@ const stdout = std.io.getStdOut().writer();
 const stdin = std.io.getStdIn().reader();
 const hst_path: []const u8 = ".shell_history";
 
-const builtins = [_][]const u8{ "exit", "echo", "pwd" };
+const builtins = [_][]const u8{ "exit", "ls", "pwd", "cd", "history" };
 
 fn sigintHandler(sig: c_int) callconv(.C) void {
     _ = sig;
@@ -196,14 +196,6 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
                 } else if (std.mem.eql(u8, cmd, "pwd")) {
                     try handlePwd();
                     std.posix.exit(0);
-                } else if (std.mem.eql(u8, cmd, "echo")) {
-                    if (args.len < 2) std.posix.exit(0);
-                    const writer = std.io.getStdOut().writer();
-                    for (args[1 .. args.len - 1]) |arg| {
-                        _ = writer.print("{s} ", .{arg}) catch {};
-                    }
-                    _ = writer.print("{s}\n", .{args[args.len - 1]}) catch {};
-                    std.posix.exit(0);
                 }
                 std.posix.exit(0);
             } else {
@@ -230,10 +222,6 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
     for (pids) |pid| {
         _ = std.posix.waitpid(pid, 0);
     }
-}
-
-fn handleEcho(args: []const u8) !void {
-    _ = args;
 }
 
 fn handleExit() !void {
@@ -318,8 +306,6 @@ pub fn main() !void {
 
         if (std.mem.eql(u8, cmd, "exit")) {
             try handleExit();
-        } else if (std.mem.eql(u8, cmd, "echo")) {
-            try handleEcho(args);
         } else if (std.mem.eql(u8, cmd, "cd")) {
             try handleCd(args);
         } else if (std.mem.eql(u8, cmd, "pwd")) {
