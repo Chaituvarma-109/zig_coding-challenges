@@ -1,4 +1,5 @@
 const std: type = @import("std");
+const testing = std.testing;
 const clib = @cImport({
     @cInclude("stdio.h");
     @cInclude("stdlib.h");
@@ -10,8 +11,8 @@ const clib = @cImport({
 const stdout = std.io.getStdOut().writer();
 const stdin = std.io.getStdIn().reader();
 const hst_path: []const u8 = ".shell_history";
-
 const builtins = [_][]const u8{ "exit", "ls", "pwd", "cd", "history" };
+var completion_path: ?[]const u8 = null;
 
 fn sigintHandler(sig: c_int) callconv(.C) void {
     _ = sig;
@@ -103,7 +104,7 @@ fn parseCommand(alloc: std.mem.Allocator, cmd_str: []const u8) ![][]const u8 {
 
     return args.toOwnedSlice();
 }
-// cat test.txt | wc -l
+
 fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
     var commands = std.ArrayList([]const u8).init(alloc);
     defer commands.deinit();
@@ -263,6 +264,146 @@ fn handleLs(alloc: std.mem.Allocator, args: []const u8, cmd: []const u8) !void {
     }
 }
 
+fn handleEcho(alloc: std.mem.Allocator, inp: []const u8) ![][]const u8 {
+    var tokens = std.ArrayList([]const u8).init(alloc);
+    defer tokens.deinit();
+
+    var pos: usize = 0;
+
+    while (pos < inp.len) {
+        if (inp[pos] == ' ') {
+            pos += 1;
+            continue;
+        }
+
+        var token = std.ArrayList(u8).init(alloc);
+        defer token.deinit();
+        while (pos < inp.len and inp[pos] != ' ') {
+            switch (inp[pos]) {
+                '\'', '"' => {
+                    const quote = inp[pos];
+                    pos += 1;
+
+                    while (inp[pos] != quote) {
+                        if (quote == '"' and inp[pos] == '\\' and switch (inp[pos + 1]) {
+                            '"', '\\', '$', '\n' => true,
+                            else => false,
+                        }) {
+                            pos += 1;
+                        }
+                        try token.append(inp[pos]);
+                        pos += 1;
+                    }
+                    if (pos < inp.len) pos += 1;
+                },
+                '\\' => {
+                    try token.append(inp[pos + 1]);
+                    pos += 2;
+                },
+                else => {
+                    try token.append(inp[pos]);
+                    pos += 1;
+                },
+            }
+        }
+        if (token.items.len > 0) {
+            try tokens.append(try token.toOwnedSlice());
+        }
+    }
+
+    return tokens.toOwnedSlice();
+}
+
+fn completion(text: [*c]const u8, start: c_int, _: c_int) callconv(.c) [*c][*c]u8 {
+    var matches: [*c][*c]u8 = null;
+
+    if (start == 0) {
+        matches = clib.rl_completion_matches(text, &custom_completion);
+    }
+    return matches;
+}
+
+fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
+    // Static variables to maintain state between calls
+    const static = struct {
+        var completion_index: usize = 0;
+        var text_len: usize = 0;
+        var checking_builtins: bool = true;
+        var path_iterator: ?std.mem.TokenIterator(u8, .scalar) = null;
+        var dir_iterator: ?std.fs.Dir.Iterator = null;
+        var has_dir_iterator: bool = false;
+        var current_dir: ?std.fs.Dir = null;
+    };
+
+    // Reset state when starting new completion
+    if (state == 0) {
+        static.completion_index = 0;
+        static.text_len = std.mem.len(text);
+        static.checking_builtins = true;
+        static.path_iterator = null;
+        static.has_dir_iterator = false;
+        static.current_dir = null;
+    }
+
+    const txt = text[0..static.text_len];
+
+    // First check built-in commands
+    if (static.checking_builtins) {
+        while (static.completion_index < builtins.len) {
+            const builtin_name = builtins[static.completion_index];
+            static.completion_index += 1;
+
+            if (std.mem.startsWith(u8, builtin_name, txt)) {
+                return clib.strdup(builtin_name.ptr);
+            }
+        }
+        // Done with builtins, now check PATH
+        static.checking_builtins = false;
+        static.completion_index = 0;
+        if (completion_path) |path| {
+            static.path_iterator = std.mem.tokenizeScalar(u8, path, ':');
+        }
+    }
+
+    // Check executables in PATH directories
+    while (static.path_iterator != null) {
+        // If no directory is currently being searched, open the next one
+        if (!static.has_dir_iterator) {
+            if (static.path_iterator.?.next()) |path_dir| {
+                // Try to open the directory
+                static.current_dir = std.fs.openDirAbsolute(path_dir, .{ .iterate = true }) catch {
+                    continue; // Skip invalid directories
+                };
+
+                static.dir_iterator = static.current_dir.?.iterate();
+                static.has_dir_iterator = true;
+            } else {
+                // No more directories in PATH
+                break;
+            }
+        }
+
+        // Search current directory for matching files
+        if (static.has_dir_iterator) {
+            while (static.dir_iterator.?.next() catch null) |entry| {
+                // Only consider regular files
+                if (entry.kind == .file) {
+                    if (std.mem.startsWith(u8, entry.name, txt)) {
+                        return clib.strdup(entry.name.ptr);
+                    }
+                }
+            }
+            // Finished with this directory
+            static.has_dir_iterator = false;
+        }
+    }
+
+    // Clean up when no more matches
+    static.current_dir = null;
+
+    return null;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc: std.mem.Allocator = gpa.allocator();
@@ -275,14 +416,14 @@ pub fn main() !void {
         file.close();
     };
 
-    const file: std.fs.File = try std.fs.cwd().openFile(hst_path, .{ .mode = .read_write });
-    defer file.close();
-
     clib.using_history();
     _ = clib.read_history(".shell_history");
     defer {
         clib.clear_history();
     }
+
+    completion_path = std.posix.getenv("PATH");
+    clib.rl_attempted_completion_function = &completion;
 
     while (true) {
         const line = clib.readline("ccshell> ");
@@ -312,6 +453,20 @@ pub fn main() !void {
             try handlePwd();
         } else if (std.mem.eql(u8, cmd, "ls")) {
             try handleLs(alloc, args, cmd);
+        } else if (std.mem.eql(u8, cmd, "echo")) {
+            const res = try handleEcho(alloc, args);
+            defer {
+                for (res) |value| {
+                    alloc.free(value);
+                }
+                alloc.free(res);
+            }
+
+            for (res[0 .. res.len - 1]) |value| {
+                try stdout.print("{s} ", .{value});
+            }
+
+            try stdout.print("{s}\n", .{res[res.len - 1]});
         } else if (std.mem.eql(u8, cmd, "history")) {
             const buff: []u8 = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
             defer alloc.free(buff);
