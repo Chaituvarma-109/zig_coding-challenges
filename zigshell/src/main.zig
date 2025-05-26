@@ -12,6 +12,7 @@ const stdout = std.io.getStdOut().writer();
 const stdin = std.io.getStdIn().reader();
 const builtins = [_][]const u8{ "exit", "ls", "pwd", "cd", "history" };
 var completion_path: ?[]const u8 = null;
+var home: ?[]const u8 = null;
 
 fn sigintHandler(sig: c_int) callconv(.C) void {
     _ = sig;
@@ -71,8 +72,7 @@ fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, args: []const u8) !
 }
 
 fn typeBuilt(alloc: std.mem.Allocator, args: []const u8) !?[]const u8 {
-    const env_path = std.posix.getenv("PATH");
-    var folders = std.mem.tokenizeAny(u8, env_path.?, ":");
+    var folders = std.mem.tokenizeAny(u8, completion_path.?, ":");
 
     while (folders.next()) |folder| {
         const full_path = try std.fs.path.join(alloc, &[_][]const u8{ folder, args });
@@ -178,24 +178,14 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
                 std.posix.close(pipes[j][1]);
             }
 
-            // Execute the command
+            // Execute the builtin commands
             if (is_builtin) {
-                // Handle builtin commands
                 if (std.mem.eql(u8, cmd, "exit")) {
                     try handleExit();
                 } else if (std.mem.eql(u8, cmd, "cd")) {
-                    const home: []const u8 = "HOME";
-                    var arg: []const u8 = args[1];
-                    if (std.mem.eql(u8, args[1], "~")) {
-                        arg = std.posix.getenv(home) orelse "";
-                    }
-                    std.posix.chdir(arg) catch {
-                        try stdout.print("cd: {s}: No such file or directory\n", .{arg});
-                    };
-                    std.posix.exit(0);
+                    try handleCd(args[1]);
                 } else if (std.mem.eql(u8, cmd, "pwd")) {
                     try handlePwd();
-                    std.posix.exit(0);
                 }
                 std.posix.exit(0);
             } else {
@@ -229,10 +219,9 @@ fn handleExit() !void {
 }
 
 fn handleCd(args: []const u8) !void {
-    const home: []const u8 = "HOME";
     var arg = args;
     if (std.mem.eql(u8, arg, "~")) {
-        arg = std.posix.getenv(home) orelse "";
+        arg = home orelse "";
     }
     std.posix.chdir(arg) catch {
         try stdout.print("{s}: No such file or directory\n", .{arg});
@@ -437,7 +426,7 @@ pub fn main() !void {
 
     try setupSignalHandlers();
 
-    const home = std.posix.getenv("HOME");
+    home = std.posix.getenv("HOME");
     const home_path = try alloc.dupe(u8, home.?);
     const hst_path = try std.fs.path.join(alloc, &.{ home_path, ".shell_history" });
 
