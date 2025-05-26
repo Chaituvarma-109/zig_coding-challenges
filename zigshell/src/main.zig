@@ -400,6 +400,36 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
     return null;
 }
 
+fn handleHistory(arg: []const u8) !void {
+    const hst_len = clib.history_length;
+
+    if (arg.len > 0) {
+        const limit = std.fmt.parseInt(c_int, arg, 10) catch {
+            try stdout.print("Invalid limit: {s}\n", .{arg});
+            return;
+        };
+
+        if (limit <= 0) return;
+        const start_ind = @max(1, hst_len - limit + 1);
+        try handleLoop(start_ind, hst_len);
+    } else {
+        try handleLoop(0, hst_len);
+    }
+}
+
+fn handleLoop(i: c_int, hst_len: c_int) !void {
+    var j = i;
+    while (j <= hst_len) : (j += 1) {
+        const entry = clib.history_get(j);
+        if (entry != null) {
+            const line = entry.*.line;
+            if (line != null) {
+                try stdout.print("{d:>5}  {s}\n", .{ @as(u32, @intCast(j)), line });
+            }
+        }
+    }
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc: std.mem.Allocator = gpa.allocator();
@@ -418,9 +448,7 @@ pub fn main() !void {
 
     clib.using_history();
     _ = clib.read_history(hst_path.ptr);
-    defer {
-        clib.clear_history();
-    }
+    defer clib.clear_history();
 
     completion_path = std.posix.getenv("PATH");
     clib.rl_attempted_completion_function = &completion;
@@ -468,10 +496,12 @@ pub fn main() !void {
 
             try stdout.print("{s}\n", .{res[res.len - 1]});
         } else if (std.mem.eql(u8, cmd, "history")) {
-            const buff: []u8 = try std.fs.cwd().readFileAlloc(alloc, hst_path, std.math.maxInt(usize));
-            defer alloc.free(buff);
-
-            try stdout.print("{s}\n", .{buff[0 .. buff.len - 1]});
+            var arg_iter = std.mem.tokenizeScalar(u8, args, ' ');
+            if (arg_iter.next()) |arg| {
+                try handleHistory(arg);
+            } else {
+                try handleHistory("");
+            }
         } else {
             try runExternalCmd(alloc, cmd, args);
         }
