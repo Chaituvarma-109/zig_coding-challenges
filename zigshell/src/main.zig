@@ -10,7 +10,6 @@ const clib = @cImport({
 
 const stdout = std.io.getStdOut().writer();
 const stdin = std.io.getStdIn().reader();
-const hst_path: []const u8 = ".shell_history";
 const builtins = [_][]const u8{ "exit", "ls", "pwd", "cd", "history" };
 var completion_path: ?[]const u8 = null;
 
@@ -371,15 +370,12 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
         if (!static.has_dir_iterator) {
             if (static.path_iterator.?.next()) |path_dir| {
                 // Try to open the directory
-                static.current_dir = std.fs.openDirAbsolute(path_dir, .{ .iterate = true }) catch {
-                    continue; // Skip invalid directories
-                };
+                static.current_dir = std.fs.openDirAbsolute(path_dir, .{ .iterate = true }) catch continue; // Skip invalid directories
 
                 static.dir_iterator = static.current_dir.?.iterate();
                 static.has_dir_iterator = true;
             } else {
-                // No more directories in PATH
-                break;
+                break; // No more directories in PATH
             }
         }
 
@@ -411,13 +407,17 @@ pub fn main() !void {
 
     try setupSignalHandlers();
 
+    const home = std.posix.getenv("HOME");
+    const home_path = try alloc.dupe(u8, home.?);
+    const hst_path = try std.fs.path.join(alloc, &.{ home_path, ".shell_history" });
+
     std.posix.access(hst_path, 0) catch {
         const file: std.fs.File = try std.fs.cwd().createFile(hst_path, .{ .read = true });
         file.close();
     };
 
     clib.using_history();
-    _ = clib.read_history(".shell_history");
+    _ = clib.read_history(hst_path.ptr);
     defer {
         clib.clear_history();
     }
@@ -433,7 +433,7 @@ pub fn main() !void {
 
         const trim_inp: []const u8 = std.mem.trim(u8, user_input, "\r\n");
         clib.add_history(line);
-        _ = clib.write_history(".shell_history");
+        _ = clib.write_history(hst_path.ptr);
 
         if (std.mem.count(u8, trim_inp, "|") > 0) {
             try executePipeCmds(alloc, trim_inp);
