@@ -2,6 +2,24 @@ const std = @import("std");
 const net = std.net;
 const Pool = std.Thread.Pool;
 
+const Request = struct {
+    method: []const u8,
+    path: []const u8,
+
+    fn new(buff: []u8) Request {
+        var splitter = std.mem.splitSequence(u8, buff, "\r\n");
+        const rqst = splitter.next().?;
+        var trim_path = std.mem.splitSequence(u8, rqst, " ");
+        const rqst_method = trim_path.next().?;
+        const rqst_path = trim_path.next().?;
+
+        return Request{
+            .method = rqst_method,
+            .path = rqst_path,
+        };
+    }
+};
+
 pub fn main() !void {
     const page_alloc = std.heap.page_allocator;
 
@@ -39,22 +57,20 @@ fn handleRequest(conn: net.Server.Connection, page_alloc: std.mem.Allocator) voi
         return;
     };
 
-    var splitter = std.mem.splitSequence(u8, buf[0..n], "\r\n");
-    const rqst = splitter.next().?;
-    var trim_path = std.mem.splitSequence(u8, rqst, " ");
-    _ = trim_path.next().?; // request method
-    const rqst_path = trim_path.next().?;
+    const req = Request.new(buf[0..n]);
 
-    if (std.mem.eql(u8, rqst_path, "/") or std.mem.eql(u8, rqst_path, "/index.html")) {
+    if (std.mem.eql(u8, req.path, "/") or std.mem.eql(u8, req.path, "/index.html")) {
         const http_resp = "HTTP/1.1 200 OK";
         const file_buff = std.fs.cwd().readFileAlloc(page_alloc, "./www/index.html", 1024) catch |err| {
             std.debug.print("Error reading file: {any}\n", .{err});
             return;
         };
+        defer page_alloc.free(file_buff);
         const resp = std.fmt.allocPrint(page_alloc, "{s}\r\n\r\n{s}", .{ http_resp, file_buff }) catch |err| {
             std.debug.print("Error formatting response: {any}\n", .{err});
             return;
         };
+        defer page_alloc.free(resp);
         conn.stream.writeAll(resp) catch |err| {
             std.debug.print("Error writing response: {any}\n", .{err});
         };
@@ -64,6 +80,7 @@ fn handleRequest(conn: net.Server.Connection, page_alloc: std.mem.Allocator) voi
             std.debug.print("Error formatting response: {any}\n", .{err});
             return;
         };
+        defer page_alloc.free(resp);
         conn.stream.writeAll(resp) catch |err| {
             std.debug.print("Error writing response: {any}\n", .{err});
         };
