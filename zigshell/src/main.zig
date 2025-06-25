@@ -43,37 +43,6 @@ fn restoreDefaultSignalHandlers() !void {
     _ = std.posix.sigaction(std.posix.SIG.INT, &act, null);
 }
 
-// fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, argv: [][]const u8) !void {
-//     if (try typeBuilt(alloc, cmd)) |p| {
-//         try restoreDefaultSignalHandlers();
-//         var res = std.process.Child.init(argv, alloc);
-//         res.stdin_behavior = .Inherit;
-//         res.stdout_behavior = .Inherit;
-//         res.stderr_behavior = .Inherit;
-
-//         if (outf) |file| {
-//             res.stdout_behavior = .Pipe;
-//             try res.spawn();
-
-//             try file.writeFileAllUnseekable(res.stdout.?, .{});
-//         } else if (errf) |file| {
-//             res.stderr_behavior = .Pipe;
-
-//             try res.spawn();
-
-//             try file.writeFileAllUnseekable(res.stderr.?, .{});
-//         } else {
-//             res.stdout_behavior = .Inherit;
-
-//             try res.spawn();
-//         }
-//         _ = try res.wait();
-//         try setupSignalHandlers();
-//     } else {
-//         try stdout.print("{s}: command not found\n", .{cmd});
-//     }
-// }
-
 fn typeBuilt(alloc: std.mem.Allocator, args: []const u8) !?[]const u8 {
     var folders = std.mem.tokenizeAny(u8, completion_path.?, ":");
 
