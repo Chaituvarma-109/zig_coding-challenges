@@ -1,5 +1,4 @@
 const std: type = @import("std");
-const testing = std.testing;
 const clib = @cImport({
     @cInclude("stdio.h");
     @cInclude("stdlib.h");
@@ -10,6 +9,8 @@ const clib = @cImport({
 
 const stdout = std.io.getStdOut().writer();
 const stdin = std.io.getStdIn().reader();
+
+const redirect_syms = [6][]const u8{ ">", "1>", "2>", ">>", "1>>", "2>>" };
 const builtins = [_][]const u8{ "exit", "ls", "pwd", "cd", "history" };
 var completion_path: ?[]const u8 = null;
 var home: ?[]const u8 = null;
@@ -42,34 +43,36 @@ fn restoreDefaultSignalHandlers() !void {
     _ = std.posix.sigaction(std.posix.SIG.INT, &act, null);
 }
 
-fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, args: []const u8) !void {
-    if (try typeBuilt(alloc, cmd)) |p| {
-        defer alloc.free(p);
+// fn runExternalCmd(alloc: std.mem.Allocator, cmd: []const u8, argv: [][]const u8) !void {
+//     if (try typeBuilt(alloc, cmd)) |p| {
+//         try restoreDefaultSignalHandlers();
+//         var res = std.process.Child.init(argv, alloc);
+//         res.stdin_behavior = .Inherit;
+//         res.stdout_behavior = .Inherit;
+//         res.stderr_behavior = .Inherit;
 
-        var argv = std.ArrayList([]const u8).init(alloc);
-        defer argv.deinit();
+//         if (outf) |file| {
+//             res.stdout_behavior = .Pipe;
+//             try res.spawn();
 
-        try argv.append(p);
+//             try file.writeFileAllUnseekable(res.stdout.?, .{});
+//         } else if (errf) |file| {
+//             res.stderr_behavior = .Pipe;
 
-        if (args.len > 0) {
-            var args_iter = std.mem.tokenizeScalar(u8, args, ' ');
-            while (args_iter.next()) |arg| {
-                try argv.append(arg);
-            }
-        }
-        try restoreDefaultSignalHandlers();
-        const res = try std.process.Child.run(.{ .allocator = alloc, .argv = argv.items });
-        defer {
-            alloc.free(res.stdout);
-            alloc.free(res.stderr);
-        }
-        try setupSignalHandlers();
+//             try res.spawn();
 
-        try stdout.print("{s}\n", .{res.stdout});
-    } else {
-        try stdout.print("{s}: command not found\n", .{cmd});
-    }
-}
+//             try file.writeFileAllUnseekable(res.stderr.?, .{});
+//         } else {
+//             res.stdout_behavior = .Inherit;
+
+//             try res.spawn();
+//         }
+//         _ = try res.wait();
+//         try setupSignalHandlers();
+//     } else {
+//         try stdout.print("{s}: command not found\n", .{cmd});
+//     }
+// }
 
 fn typeBuilt(alloc: std.mem.Allocator, args: []const u8) !?[]const u8 {
     var folders = std.mem.tokenizeAny(u8, completion_path.?, ":");
@@ -183,7 +186,7 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
                 if (std.mem.eql(u8, cmd, "exit")) {
                     try handleExit();
                 } else if (std.mem.eql(u8, cmd, "cd")) {
-                    try handleCd(args[1]);
+                    try handleCd(args);
                 } else if (std.mem.eql(u8, cmd, "pwd")) {
                     try handlePwd();
                 }
@@ -218,9 +221,9 @@ fn handleExit() !void {
     std.posix.exit(0);
 }
 
-fn handleCd(args: []const u8) !void {
-    var arg = args;
-    if (std.mem.eql(u8, arg, "~")) {
+fn handleCd(argv: [][]const u8) !void {
+    var arg = argv[1];
+    if (std.mem.eql(u8, argv[1], "~")) {
         arg = home orelse "";
     }
     std.posix.chdir(arg) catch {
@@ -234,25 +237,7 @@ fn handlePwd() !void {
     try stdout.print("{s}\n", .{cwd});
 }
 
-fn handleLs(alloc: std.mem.Allocator, args: []const u8, cmd: []const u8) !void {
-    if (args.len == 0) {
-        var dir: std.fs.Dir = try std.fs.cwd().openDir(".", .{ .iterate = true });
-        defer dir.close();
-        var iter = dir.iterate();
-
-        while (try iter.next()) |entry| {
-            if (entry.name.len > 0 and entry.name[0] == '.') {
-                continue;
-            }
-            try stdout.print("{s} ", .{entry.name});
-        }
-        try stdout.print("\n", .{});
-    } else {
-        try runExternalCmd(alloc, cmd, args);
-    }
-}
-
-fn handleEcho(alloc: std.mem.Allocator, inp: []const u8) ![][]const u8 {
+fn parse_inp(alloc: std.mem.Allocator, inp: []const u8) ![][]const u8 {
     var tokens = std.ArrayList([]const u8).init(alloc);
     defer tokens.deinit();
 
@@ -389,12 +374,12 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
     return null;
 }
 
-fn handleHistory(arg: []const u8) !void {
+fn handleHistory(arg: [][]const u8) !void {
     const hst_len = clib.history_length;
 
     if (arg.len > 0) {
-        const limit = std.fmt.parseInt(c_int, arg, 10) catch {
-            try stdout.print("Invalid limit: {s}\n", .{arg});
+        const limit = std.fmt.parseInt(c_int, arg[1], 10) catch {
+            try stdout.print("Invalid limit: {s}\n", .{arg[1]});
             return;
         };
 
@@ -428,7 +413,9 @@ pub fn main() !void {
 
     home = std.posix.getenv("HOME");
     const home_path = try alloc.dupe(u8, home.?);
+    defer alloc.free(home_path);
     const hst_path = try std.fs.path.join(alloc, &.{ home_path, ".shell_history" });
+    defer alloc.free(hst_path);
 
     std.posix.access(hst_path, 0) catch {
         const file: std.fs.File = try std.fs.cwd().createFile(hst_path, .{ .read = true });
@@ -457,42 +444,109 @@ pub fn main() !void {
             continue;
         }
 
-        var cmds_iter = std.mem.tokenizeScalar(u8, trim_inp, ' ');
+        const parsed_cmds: [][]const u8 = try parse_inp(alloc, trim_inp); // { echo, Hello Maria, 1>, /tmp/foo/baz.md }
+        defer {
+            for (parsed_cmds) |cmd| {
+                alloc.free(cmd);
+            }
+            alloc.free(parsed_cmds);
+        }
 
-        const cmd: []const u8 = cmds_iter.next().?;
-        const args: []const u8 = cmds_iter.rest();
+        var index: ?usize = null;
+        var target: u8 = 1;
+        var append: bool = false;
+
+        for (parsed_cmds, 0..) |cm, i| {
+            if (std.mem.eql(u8, cm, ">") or std.mem.eql(u8, cm, "1>") or std.mem.eql(u8, cm, "2>")) {
+                index = i;
+                if (cm.len == 2) {
+                    target = cm[0] - '0';
+                }
+                break;
+            }
+
+            if (std.mem.eql(u8, cm, ">>") or std.mem.eql(u8, cm, "1>>") or std.mem.eql(u8, cm, "2>>")) {
+                append = true;
+                index = i;
+                if (cm.len == 2) {
+                    target = cm[0] - '0';
+                }
+                break;
+            }
+        }
+
+        var outf: ?std.fs.File = null;
+        var errf: ?std.fs.File = null;
+        var out = stdout;
+        var argv = parsed_cmds;
+
+        if (index) |ind| {
+            argv = parsed_cmds[0..ind];
+            if (target == 1) {
+                outf = try std.fs.cwd().createFile(parsed_cmds[ind + 1], .{ .truncate = !append });
+
+                if (outf) |file| {
+                    if (append) try file.seekFromEnd(0);
+                    out = file.writer();
+                }
+            } else if (target == 2) {
+                errf = try std.fs.cwd().createFile(parsed_cmds[ind + 1], .{ .truncate = !append });
+                if (errf) |file| {
+                    if (append) try file.seekFromEnd(0);
+                }
+            }
+        }
+
+        defer {
+            if (outf) |file| file.close();
+            if (errf) |file| file.close();
+        }
+
+        const cmd: []const u8 = argv[0];
 
         if (std.mem.eql(u8, cmd, "exit")) {
             try handleExit();
         } else if (std.mem.eql(u8, cmd, "cd")) {
-            try handleCd(args);
+            try handleCd(argv);
         } else if (std.mem.eql(u8, cmd, "pwd")) {
             try handlePwd();
-        } else if (std.mem.eql(u8, cmd, "ls")) {
-            try handleLs(alloc, args, cmd);
         } else if (std.mem.eql(u8, cmd, "echo")) {
-            const res = try handleEcho(alloc, args);
-            defer {
-                for (res) |value| {
-                    alloc.free(value);
-                }
-                alloc.free(res);
+            if (argv.len < 2) return;
+            for (argv[1 .. argv.len - 1]) |arg| {
+                try out.print("{s} ", .{arg});
             }
-
-            for (res[0 .. res.len - 1]) |value| {
-                try stdout.print("{s} ", .{value});
-            }
-
-            try stdout.print("{s}\n", .{res[res.len - 1]});
+            try out.print("{s}\n", .{argv[argv.len - 1]});
         } else if (std.mem.eql(u8, cmd, "history")) {
-            var arg_iter = std.mem.tokenizeScalar(u8, args, ' ');
-            if (arg_iter.next()) |arg| {
-                try handleHistory(arg);
-            } else {
-                try handleHistory("");
-            }
+            try handleHistory(argv);
         } else {
-            try runExternalCmd(alloc, cmd, args);
+            if (try typeBuilt(alloc, cmd)) |_| {
+                try restoreDefaultSignalHandlers();
+                var res = std.process.Child.init(argv, alloc);
+                res.stdin_behavior = .Inherit;
+                res.stdout_behavior = .Inherit;
+                res.stderr_behavior = .Inherit;
+
+                if (outf) |file| {
+                    res.stdout_behavior = .Pipe;
+                    try res.spawn();
+
+                    try file.writeFileAllUnseekable(res.stdout.?, .{});
+                } else if (errf) |file| {
+                    res.stderr_behavior = .Pipe;
+
+                    try res.spawn();
+
+                    try file.writeFileAllUnseekable(res.stderr.?, .{});
+                } else {
+                    res.stdout_behavior = .Inherit;
+
+                    try res.spawn();
+                }
+                _ = try res.wait();
+                try setupSignalHandlers();
+            } else {
+                try stdout.print("{s}: command not found\n", .{cmd});
+            }
         }
     }
 }
