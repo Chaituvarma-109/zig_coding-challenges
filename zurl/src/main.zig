@@ -40,7 +40,6 @@ pub fn main() !void {
             i += 1;
             if (i >= args.len) return error.MissingHeaderArgument;
             data = args[i];
-            try writer.print("d: {s}\n", .{args[i]});
         } else if (mem.eql(u8, arg, "-H")) {
             i += 1;
             if (i >= args.len) return error.MissingHeaderArgument;
