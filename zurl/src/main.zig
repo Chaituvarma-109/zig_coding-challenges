@@ -1,6 +1,7 @@
 const std = @import("std");
 const process = std.process;
 const http = std.http;
+const net = std.net;
 const mem = std.mem;
 const writer = std.io.getStdOut().writer();
 
@@ -44,7 +45,7 @@ pub fn main() !void {
             i += 1;
             if (i >= args.len) return error.MissingHeaderArgument;
             headers = args[i];
-        } else if (std.mem.startsWith(u8, arg, "http://")) {
+        } else if (std.mem.startsWith(u8, arg, "http://") or std.mem.startsWith(u8, arg, "https://")) {
             url = arg;
         } else {
             try writer.print("Unknown argument: {s}\n", .{arg});
@@ -58,6 +59,7 @@ pub fn main() !void {
 
     const uri = try std.Uri.parse(url);
     const path = uri.path.percent_encoded;
+    const scheme = uri.scheme;
 
     var req_headers: http.Client.Request.Headers = .{};
     switch (method) {
@@ -88,9 +90,16 @@ pub fn main() !void {
     defer req.deinit();
 
     if (verbose) {
-        try writer.print("* Connected to {s}\n", .{req.headers.host.override});
+        const port = uri.port orelse (if (mem.eql(u8, scheme, "http")) @as(u16, 80) else @as(u16, 443));
+        const host = req.headers.host.override;
+        const addr = try net.getAddressList(page_alloc, host, port);
+        defer addr.deinit();
+        const resolved_ip_addr = addr.*.addrs[0];
+
+        try writer.print("*   Trying {any}...\n", .{resolved_ip_addr});
+        try writer.print("* Connected to {s} ({any}) port {d}\n", .{ host, resolved_ip_addr, port });
         try writer.print("> {s} {s} {s}\n", .{ @tagName(method), path, @tagName(req.version) });
-        try writer.print("> Host: {s}\n", .{req.headers.host.override});
+        try writer.print("> Host: {s}\n", .{host});
         try writer.print("> User-Agent: {s}\n", .{req.headers.user_agent.override});
         try writer.print("> {s}: {s}\n", .{ req.extra_headers[0].name, req.extra_headers[0].value });
         switch (method) {
@@ -134,9 +143,8 @@ pub fn main() !void {
     }
 
     var body_buff: [body_max_size]u8 = undefined;
-    _ = try req.readAll(&body_buff);
-    const body_len = req.response.content_length orelse return error.NoBodyLength;
-    const body = body_buff[0..body_len];
+    const bytes_read = try req.readAll(&body_buff);
+    const body = body_buff[0..bytes_read];
 
     try writer.print("{s}\n", .{body});
 }
