@@ -115,7 +115,8 @@ pub fn main() !void {
     try req.wait();
 
     if (req.response.status != http.Status.ok) {
-        return error.Wrongrequest;
+        try writer.print("{s}\n", .{req.response.status.phrase().?});
+        return;
     }
 
     if (verbose) {
