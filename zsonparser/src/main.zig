@@ -39,10 +39,12 @@ pub fn parseJson(json_file: []const u8, alloc: std.mem.Allocator) anyerror![]con
     } else {
         var scanner = Scanner.init(file_contents, alloc);
         defer scanner.tokens.deinit();
-        try scanner.scan();
-        try scanner.printtokens();
-        var parser = Parser.init(scanner.tokens);
-        const res = try parser.parse();
+        const res = scanner.scan() catch |err| {
+            return err;
+        };
+        // try scanner.printtokens();
+        // var parser = Parser.init(scanner.tokens);
+        // const res = try parser.parse();
 
         if (res) {
             return "ValidJson";
@@ -53,6 +55,7 @@ pub fn parseJson(json_file: []const u8, alloc: std.mem.Allocator) anyerror![]con
 }
 
 test "step 1 valid json" {
+    std.debug.print("test 1 valid json\n", .{});
     const file_path: []const u8 = "tests/step1/valid.json";
     const result = parseJson(file_path, testing.allocator) catch |err| {
         std.debug.print("Unexpected error: {}\n", .{err});
@@ -62,9 +65,48 @@ test "step 1 valid json" {
 }
 
 test "step 1 invalid json" {
+    std.debug.print("test 1 invalid json\n", .{});
     const file_path: []const u8 = "tests/step1/invalid.json";
     _ = parseJson(file_path, testing.allocator) catch |err| {
         try testing.expectEqual(error.EmptyJsonFile, err);
+        return;
+    };
+}
+
+test "step 2 valid json" {
+    std.debug.print("test 2 valid json\n", .{});
+    const file_path: []const u8 = "tests/step2/valid.json";
+    const result = parseJson(file_path, testing.allocator) catch |err| {
+        std.debug.print("Unexpected error: {}\n", .{err});
+        return error.TestFailed;
+    };
+    try testing.expectEqualStrings("ValidJson", result);
+}
+
+test "step 2 valid2 json" {
+    std.debug.print("test 2 valid2 json\n", .{});
+    const file_path: []const u8 = "tests/step2/valid2.json";
+    const result = parseJson(file_path, testing.allocator) catch |err| {
+        std.debug.print("Unexpected error: {}\n", .{err});
+        return error.TestFailed;
+    };
+    try testing.expectEqualStrings("ValidJson", result);
+}
+
+test "step 2 invalid json" {
+    std.debug.print("test 2 invalid json\n", .{});
+    const file_path: []const u8 = "tests/step2/invalid.json";
+    _ = parseJson(file_path, testing.allocator) catch |err| {
+        try testing.expectEqual(error.FoundTrailingComma, err);
+        return;
+    };
+}
+
+test "step 2 invalid2 json" {
+    std.debug.print("test 2 invalid2 json\n", .{});
+    const file_path: []const u8 = "tests/step2/invalid2.json";
+    _ = parseJson(file_path, testing.allocator) catch |err| {
+        try testing.expectEqual(error.NotFoundStringPair, err);
         return;
     };
 }
@@ -77,7 +119,7 @@ test "step 1 invalid json" {
 //     };
 //     try testing.expectEqualStrings("ValidJson", result);
 // }
-//
+
 // test "step 1 test pass 2 json" {
 //     const file_path: []const u8 = "test/pass2.json"; // Fixed path
 //     const result = parseJson(file_path, testing.allocator) catch |err| {
@@ -86,7 +128,7 @@ test "step 1 invalid json" {
 //     };
 //     try testing.expectEqualStrings("ValidJson", result);
 // }
-//
+
 // test "step 1 test pass 3 json" {
 //     const file_path: []const u8 = "test/pass3.json"; // Fixed path
 //     const result = parseJson(file_path, testing.allocator) catch |err| {
@@ -95,7 +137,7 @@ test "step 1 invalid json" {
 //     };
 //     try testing.expectEqualStrings("ValidJson", result);
 // }
-//
+
 // test "step 1 test fail 1 json" {
 //     const file_path: []const u8 = "test/fail1.json"; // Fixed path
 //     _ = parseJson(file_path, testing.allocator) catch |err| {
@@ -103,7 +145,7 @@ test "step 1 invalid json" {
 //         return;
 //     };
 // }
-//
+
 // test "step 1 test fail 2 json" {
 //     const file_path: []const u8 = "test/fail2.json"; // Fixed path
 //     _ = parseJson(file_path, testing.allocator) catch |err| {
@@ -111,7 +153,7 @@ test "step 1 invalid json" {
 //         return;
 //     };
 // }
-//
+
 // test "step 1 test fail 32 json" {
 //     const file_path: []const u8 = "test/fail32.json"; // Fixed path
 //     _ = parseJson(file_path, testing.allocator) catch |err| {

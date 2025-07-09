@@ -53,63 +53,125 @@ fn add_tokens(self: *Self, token_type: Token.TokenType, lex: []const u8) !void {
     try self.tokens.append(tok);
 }
 
-pub fn scan(self: *Self) !void {
-    while (!self.isAtEnd()) {
-        self.start = self.current;
-        try self.scanToken();
-    }
-
-    const eofToken = Token.new(.EOF, "");
-    _ = try self.tokens.append(eofToken);
-}
-
-pub fn scanToken(self: *Self) !void {
-    const ch = self.advance();
-    switch (ch) {
-        '{' => try self.add_tokens(.OBJECT_BEGIN, "{"),
-        '[' => try self.add_tokens(.ARRAY_BEGIN, "["),
-        '}' => try self.add_tokens(.OBJECT_END, "}"),
-        ']' => try self.add_tokens(.OBJECT_END, "]"),
-        'f' => {
-            const pos = self.current;
-            if (self.source[pos + 1] == 'a' and self.source[pos + 2] == 'l' and self.source[pos + 3] == 's' and self.source[pos + 4] == 'e') {
-                try self.add_tokens(.FALSE, "false");
+pub fn scan(self: *Self) !bool {
+    s: switch (self.source[self.current]) {
+        '{' => {
+            self.current += 1;
+            continue :s self.source[self.current];
+        },
+        '[' => {
+            self.current += 1;
+            continue :s self.source[self.current];
+        },
+        '}' => {
+            self.current += 1;
+            if (!self.isAtEnd()) {
+                continue :s self.source[self.current];
             } else {
-                try stderr.print("{c} is not boolean.", .{ch});
+                if (self.source.len - 1 == ',') {
+                    return error.FoundTrailingComma;
+                }
+                return true;
             }
-            self.current += 4;
+        },
+        ']' => {
+            self.current += 1;
+            if (!self.isAtEnd()) {
+                continue :s self.source[self.current];
+            } else {
+                return true;
+            }
+        },
+        'f' => {
+            if (try self.matchkeyword("false")) {
+                continue :s self.source[self.current];
+            } else {
+                try stderr.print("{c} is not boolean.\n", .{self.source[self.current]});
+                return false;
+            }
         },
         't' => {
-            const pos = self.current;
-            if (self.source[pos + 1] == 'r' and self.source[pos + 2] == 'u' and self.source[pos + 3] == 'e') {
-                try self.add_tokens(.TRUE, "true");
+            if (try self.matchkeyword("true")) {
+                continue :s self.source[self.current];
             } else {
-                try stderr.print("{c} is not boolean.", .{ch});
+                try stderr.print("{c} is not boolean.\n", .{self.source[self.current]});
+                return false;
             }
-            self.current += 3;
         },
         'n' => {
-            const pos = self.current;
-            if (self.source[pos + 1] == 'u' and self.source[pos + 2] == 'l' and self.source[pos + 3] == 'l') {
-                try self.add_tokens(.NULL, "null");
+            if (try self.matchkeyword("null")) {
+                continue :s self.source[self.current];
             } else {
-                try stderr.print("{c} is not null.", .{ch});
+                try stderr.print("{c} is not null.\n", .{self.source[self.current]});
+                return false;
             }
-
-            self.current += 3;
         },
-        ',' => try self.add_tokens(.COMMA, ","),
-        ':' => try self.add_tokens(.NAME_SEPARATOR, ":"),
-        '"' => try self.handlestring(),
-        ' ', 0, '\r', '\t' => {},
-        else => try self.handleNumber(),
+        ',' => {
+            self.current += 1;
+            continue :s self.source[self.current];
+        },
+        ':' => {},
+        '"' => {
+            const res = self.handlestring() catch |err| {
+                return err;
+            };
+            if (res) {
+                continue :s self.source[self.current];
+            }
+        },
+        ' ', '\n', '\r', '\t' => {
+            self.current += 1;
+            continue :s self.source[self.current];
+        },
+        0...9 => try self.handleNumber(),
+        else => return error.UnexpectedToken,
     }
+
+    return true;
 }
 
-fn handlestring(self: *Self) !void {
-    _= self;
+fn matchkeyword(self: *Self, keyword: []const u8) !bool {
+    if (self.current + keyword.len > self.source.len) {
+        return false;
+    }
+
+    for (keyword, 0..) |char, i| {
+        if (self.source[self.current + i] != char) {
+            return false;
+        }
+    }
+
+    if (self.current + keyword.len < self.source.len) {
+        const next_char = self.source[self.current + keyword.len];
+        if (std.ascii.isAlphabetic(next_char) or std.ascii.isDigit(next_char) or next_char == '_') {
+            return false;
+        }
+    }
+
+    self.current += keyword.len;
+    return true;
+}
+
+fn handlestring(self: *Self) anyerror!bool {
+    _ = self.advance();
+    var pos = self.current;
+    p: switch (self.source[pos]) {
+        '"' => {
+            if (self.source[pos + 1] == ':' or self.source[pos + 1] == ',') {
+                self.current = pos + 1;
+                return true;
+            }
+        },
+        else => {
+            pos += 1;
+            continue :p self.source[pos];
+        },
+    }
+
+    return error.NotFoundStringPair;
 }
 
 fn handleNumber(self: *Self) !void {
     _ = self;
+    std.debug.print("in the handle number\n", .{});
 }
