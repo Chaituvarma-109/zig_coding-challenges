@@ -27,7 +27,7 @@ pub fn main() !void {
             return;
         };
     } else {
-        file = std.io.getStdIn();
+        file = std.fs.File.stdin();
     }
     defer file.close();
 

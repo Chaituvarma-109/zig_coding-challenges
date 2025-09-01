@@ -5,13 +5,13 @@ pub fn main() !void {
     const alloc = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var paths_arr = std.ArrayList([]const u8).init(alloc);
-    defer paths_arr.deinit();
+    var paths_arr: std.ArrayList([]const u8) = .empty;
+    defer paths_arr.deinit(alloc);
 
     const paths = std.posix.getenv("PATH") orelse return error.patherror;
     var path_iter = std.mem.tokenizeAny(u8, paths, ":");
     while (path_iter.next()) |path| {
-        try paths_arr.append(path);
+        try paths_arr.append(alloc, path);
     }
 
     const args = try std.process.argsAlloc(alloc);
