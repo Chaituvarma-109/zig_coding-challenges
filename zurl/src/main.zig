@@ -1,15 +1,12 @@
 const std = @import("std");
 const process = std.process;
 const http = std.http;
-const net = std.net;
 const mem = std.mem;
 
-// const headers_max_size: usize = 4096;
 const body_max_size: usize = 65536;
 
 pub fn main() !void {
     const page_alloc = std.heap.page_allocator;
-    // var buff: [headers_max_size]u8 = undefined;
 
     var client = http.Client{ .allocator = page_alloc };
     defer client.deinit();
@@ -94,11 +91,6 @@ pub fn main() !void {
     if (verbose) {
         const port = uri.port orelse (if (mem.eql(u8, scheme, "http")) @as(u16, 80) else @as(u16, 443));
         const host = req.headers.host.override;
-        // const addr = try net.getAddressList(page_alloc, host, port);
-        // defer addr.deinit();
-        // const resolved_ip_addr = addr.addrs[0].any;
-
-        // try writer.print("*   Trying {any}...\n", .{resolved_ip_addr});
         try writer.print("* Connected to {s} port {d}\n", .{ host, port });
         try writer.print("> {s} {s} {s}\n", .{ @tagName(method), path, @tagName(req.version) });
         try writer.print("> Host: {s}\n", .{host});
@@ -123,7 +115,6 @@ pub fn main() !void {
 
     var redirect_buff: [8 * 1024]u8 = undefined;
     var res = try req.receiveHead(&redirect_buff);
-    std.debug.print("response rx\n", .{});
 
     if (res.head.status != http.Status.ok) {
         try writer.print("{s}\n", .{res.head.status.phrase().?});
@@ -144,11 +135,11 @@ pub fn main() !void {
         try writer.print("< \n", .{});
     }
 
+    // std.http.Method.responseHasBody(.PUT);
     var body_buff: [body_max_size]u8 = undefined;
     const reader = res.reader(&.{});
     const bytes_read = try reader.readSliceShort(&body_buff);
     const body = body_buff[0..bytes_read];
-    std.debug.print("bytes_read: {d}\n", .{bytes_read});
 
     try writer.print("{s}\n", .{body});
 }
