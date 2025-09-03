@@ -3,14 +3,13 @@ const process = std.process;
 const http = std.http;
 const net = std.net;
 const mem = std.mem;
-const writer = std.io.getStdOut().writer();
 
-const headers_max_size: usize = 4096;
+// const headers_max_size: usize = 4096;
 const body_max_size: usize = 65536;
 
 pub fn main() !void {
     const page_alloc = std.heap.page_allocator;
-    var buff: [headers_max_size]u8 = undefined;
+    // var buff: [headers_max_size]u8 = undefined;
 
     var client = http.Client{ .allocator = page_alloc };
     defer client.deinit();
@@ -18,11 +17,14 @@ pub fn main() !void {
     const args = try process.argsAlloc(page_alloc);
     defer process.argsFree(page_alloc, args);
 
+    var wr = std.fs.File.stdout().writer(&.{});
+    const writer = &wr.interface;
+
     var method = http.Method.GET;
     var verbose = false;
     var url: []const u8 = "http://eu.httpbin.org/get";
     var headers: []const u8 = "";
-    var data: ?[]const u8 = null;
+    var data: ?[]u8 = null;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -76,8 +78,8 @@ pub fn main() !void {
         },
     }
 
-    var req: http.Client.Request = client.open(method, uri, .{
-        .server_header_buffer = &buff,
+    var req: http.Client.Request = client.request(method, uri, .{
+        // .server_header_buffer = &buff,
         .keep_alive = false,
         .headers = req_headers,
         .extra_headers = &[_]http.Header{
@@ -92,12 +94,12 @@ pub fn main() !void {
     if (verbose) {
         const port = uri.port orelse (if (mem.eql(u8, scheme, "http")) @as(u16, 80) else @as(u16, 443));
         const host = req.headers.host.override;
-        const addr = try net.getAddressList(page_alloc, host, port);
-        defer addr.deinit();
-        const resolved_ip_addr = addr.*.addrs[0];
+        // const addr = try net.getAddressList(page_alloc, host, port);
+        // defer addr.deinit();
+        // const resolved_ip_addr = addr.addrs[0].any;
 
-        try writer.print("*   Trying {any}...\n", .{resolved_ip_addr});
-        try writer.print("* Connected to {s} ({any}) port {d}\n", .{ host, resolved_ip_addr, port });
+        // try writer.print("*   Trying {any}...\n", .{resolved_ip_addr});
+        try writer.print("* Connected to {s} port {d}\n", .{ host, port });
         try writer.print("> {s} {s} {s}\n", .{ @tagName(method), path, @tagName(req.version) });
         try writer.print("> Host: {s}\n", .{host});
         try writer.print("> User-Agent: {s}\n", .{req.headers.user_agent.override});
@@ -114,28 +116,28 @@ pub fn main() !void {
 
     if (data) |content| {
         req.transfer_encoding = .{ .content_length = content.len };
+        try req.sendBodyComplete(content);
+    } else {
+        try req.sendBodiless();
     }
 
-    try req.send();
-    if (data) |content| {
-        try req.writeAll(content);
-    }
-    try req.finish();
-    try req.wait();
+    var redirect_buff: [8 * 1024]u8 = undefined;
+    var res = try req.receiveHead(&redirect_buff);
+    std.debug.print("response rx\n", .{});
 
-    if (req.response.status != http.Status.ok) {
-        try writer.print("{s}\n", .{req.response.status.phrase().?});
+    if (res.head.status != http.Status.ok) {
+        try writer.print("{s}\n", .{res.head.status.phrase().?});
         return;
     }
 
     if (verbose) {
-        const ver = req.response.version;
-        const status_phrase = req.response.status.phrase().?;
-        const status = req.response.status;
+        const ver = res.head.version;
+        const status_phrase = res.head.status.phrase().?;
+        const status = res.head.status;
 
         try writer.print("< {s} {d} {s}\n", .{ @tagName(ver), @intFromEnum(status), status_phrase });
 
-        var iter = req.response.iterateHeaders();
+        var iter = res.head.iterateHeaders();
         while (iter.next()) |header| {
             try writer.print("< {s}:{s}\n", .{ header.name, header.value });
         }
@@ -143,8 +145,10 @@ pub fn main() !void {
     }
 
     var body_buff: [body_max_size]u8 = undefined;
-    const bytes_read = try req.readAll(&body_buff);
+    const reader = res.reader(&.{});
+    const bytes_read = try reader.readSliceShort(&body_buff);
     const body = body_buff[0..bytes_read];
+    std.debug.print("bytes_read: {d}\n", .{bytes_read});
 
     try writer.print("{s}\n", .{body});
 }
