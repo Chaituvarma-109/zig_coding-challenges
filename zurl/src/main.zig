@@ -3,7 +3,7 @@ const process = std.process;
 const http = std.http;
 const mem = std.mem;
 
-const body_max_size: usize = 65536;
+const body_max_size: usize = 4096;
 
 pub fn main() !void {
     const page_alloc = std.heap.page_allocator;
@@ -16,6 +16,9 @@ pub fn main() !void {
 
     var wr = std.fs.File.stdout().writer(&.{});
     const writer = &wr.interface;
+
+    // var resp_wr = std.Io.Writer.Allocating.init(page_alloc);
+    // defer resp_wr.deinit();
 
     var method = http.Method.GET;
     var verbose = false;
@@ -75,8 +78,24 @@ pub fn main() !void {
         },
     }
 
+    var redirect_buff: [1024]u8 = undefined;
+
+    // _ = try client.fetch(.{
+    //     .method = method,
+    //     .payload = data,
+    //     .keep_alive = false,
+    //     .location = .{ .uri = uri },
+    //     .headers = req_headers,
+    //     .extra_headers = &[_]http.Header{
+    //         .{ .name = "Accept", .value = "*/*" },
+    //     },
+    //     .redirect_buffer = &redirect_buff,
+    //     .response_writer = &resp_wr.writer,
+    // });
+
+    // std.debug.print("{s}\n", .{resp_wr.written()});
+
     var req: http.Client.Request = client.request(method, uri, .{
-        // .server_header_buffer = &buff,
         .keep_alive = false,
         .headers = req_headers,
         .extra_headers = &[_]http.Header{
@@ -108,12 +127,13 @@ pub fn main() !void {
 
     if (data) |content| {
         req.transfer_encoding = .{ .content_length = content.len };
-        try req.sendBodyComplete(content);
+        var body = try req.sendBody(&.{});
+        try body.writer.writeAll(content);
+        try body.end();
     } else {
         try req.sendBodiless();
     }
 
-    var redirect_buff: [8 * 1024]u8 = undefined;
     var res = try req.receiveHead(&redirect_buff);
 
     if (res.head.status != http.Status.ok) {
@@ -135,7 +155,6 @@ pub fn main() !void {
         try writer.print("< \n", .{});
     }
 
-    // std.http.Method.responseHasBody(.PUT);
     var body_buff: [body_max_size]u8 = undefined;
     const reader = res.reader(&.{});
     const bytes_read = try reader.readSliceShort(&body_buff);
