@@ -15,7 +15,7 @@ pub fn main() !void {
     defer process.argsFree(page_alloc, args);
 
     var wr = std.fs.File.stdout().writer(&.{});
-    const writer = &wr.interface;
+    var writer = &wr.interface;
 
     // var resp_wr = std.Io.Writer.Allocating.init(page_alloc);
     // defer resp_wr.deinit();
