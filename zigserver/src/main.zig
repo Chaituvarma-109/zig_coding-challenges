@@ -39,49 +39,48 @@ pub fn main() !void {
             continue;
         };
 
-        try pool.spawn(handleRequest, .{ conn, page_alloc });
+        try pool.spawn(handleRequest, .{conn});
     }
 }
 
-fn handleRequest(conn: net.Server.Connection, page_alloc: std.mem.Allocator) void {
+fn handleRequest(conn: net.Server.Connection) void {
     defer conn.stream.close();
 
-    var buf = page_alloc.alloc(u8, 1024) catch |err| {
-        std.debug.print("Error allocating buffer: {any}\n", .{err});
-        return;
-    };
-    defer page_alloc.free(buf);
+    var r = conn.stream.reader(&.{});
+    var w = conn.stream.writer(&.{});
 
-    const n = conn.stream.read(buf) catch |err| {
+    var buff: [1024]u8 = undefined;
+
+    const n = r.file_reader.readStreaming(&buff) catch |err| {
         std.debug.print("Error reading from connection: {any}\n", .{err});
         return;
     };
 
-    const req = Request.new(buf[0..n]);
+    const req = Request.new(buff[0..n]);
+
+    var r_buff: [1024]u8 = undefined;
 
     if (std.mem.eql(u8, req.path, "/") or std.mem.eql(u8, req.path, "/index.html")) {
         const http_resp = "HTTP/1.1 200 OK";
-        const file_buff = std.fs.cwd().readFileAlloc(page_alloc, "./www/index.html", 1024) catch |err| {
+        var f_buff: [1024]u8 = undefined;
+        const contents = std.fs.cwd().readFile("./www/index.html", &f_buff) catch |err| {
             std.debug.print("Error reading file: {any}\n", .{err});
             return;
         };
-        defer page_alloc.free(file_buff);
-        const resp = std.fmt.allocPrint(page_alloc, "{s}\r\n\r\n{s}", .{ http_resp, file_buff }) catch |err| {
+        const resp = std.fmt.bufPrint(&r_buff, "{s}\r\n\r\n{s}", .{ http_resp, contents }) catch |err| {
             std.debug.print("Error formatting response: {any}\n", .{err});
             return;
         };
-        defer page_alloc.free(resp);
-        conn.stream.writeAll(resp) catch |err| {
+        w.interface.writeAll(resp) catch |err| {
             std.debug.print("Error writing response: {any}\n", .{err});
         };
     } else {
         const http_resp = "HTTP/1.1 404 Not Found";
-        const resp = std.fmt.allocPrint(page_alloc, "{s}\r\n\r\n", .{http_resp}) catch |err| {
+        const resp = std.fmt.bufPrint(&r_buff, "{s}\r\n\r\n", .{http_resp}) catch |err| {
             std.debug.print("Error formatting response: {any}\n", .{err});
             return;
         };
-        defer page_alloc.free(resp);
-        conn.stream.writeAll(resp) catch |err| {
+        w.interface.writeAll(resp) catch |err| {
             std.debug.print("Error writing response: {any}\n", .{err});
         };
     }
