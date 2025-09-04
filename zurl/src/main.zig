@@ -15,10 +15,10 @@ pub fn main() !void {
     defer process.argsFree(page_alloc, args);
 
     var wr = std.fs.File.stdout().writer(&.{});
-    var writer = &wr.interface;
+    const writer = &wr.interface;
 
-    // var resp_wr = std.Io.Writer.Allocating.init(page_alloc);
-    // defer resp_wr.deinit();
+    var resp_wr = std.Io.Writer.Allocating.init(page_alloc);
+    defer resp_wr.deinit();
 
     var method = http.Method.GET;
     var verbose = false;
@@ -78,6 +78,10 @@ pub fn main() !void {
         },
     }
 
+    const extra_headers = [_]http.Header{
+        .{ .name = "Accept", .value = "*/*" },
+    };
+
     var redirect_buff: [1024]u8 = undefined;
 
     // _ = try client.fetch(.{
@@ -86,9 +90,7 @@ pub fn main() !void {
     //     .keep_alive = false,
     //     .location = .{ .uri = uri },
     //     .headers = req_headers,
-    //     .extra_headers = &[_]http.Header{
-    //         .{ .name = "Accept", .value = "*/*" },
-    //     },
+    //     .extra_headers = &extra_headers,
     //     .redirect_buffer = &redirect_buff,
     //     .response_writer = &resp_wr.writer,
     // });
@@ -98,9 +100,7 @@ pub fn main() !void {
     var req: http.Client.Request = client.request(method, uri, .{
         .keep_alive = false,
         .headers = req_headers,
-        .extra_headers = &[_]http.Header{
-            .{ .name = "Accept", .value = "*/*" },
-        },
+        .extra_headers = &extra_headers,
     }) catch |err| {
         try writer.print("Unable to open the request: {}\n", .{err});
         return;
@@ -155,10 +155,16 @@ pub fn main() !void {
         try writer.print("< \n", .{});
     }
 
-    var body_buff: [body_max_size]u8 = undefined;
+    // var body_buff: [body_max_size]u8 = undefined;
     const reader = res.reader(&.{});
-    const bytes_read = try reader.readSliceShort(&body_buff);
-    const body = body_buff[0..bytes_read];
+    _ = reader.stream(&resp_wr.writer, .limited(body_max_size)) catch |err| {
+        switch (err) {
+            error.EndOfStream => {},
+            else => std.log.err("err: {}\n", .{err}),
+        }
+        return;
+    };
+    const body = resp_wr.written();
 
     try writer.print("{s}\n", .{body});
 }
