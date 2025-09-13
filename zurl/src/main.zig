@@ -111,7 +111,12 @@ pub fn main() !void {
 
     if (data) |content| {
         req.transfer_encoding = .{ .content_length = content.len };
-        var body: http.BodyWriter = try req.sendBody(&.{});
+        var body: http.BodyWriter = req.sendBody(&.{}) catch |err| switch (err) {
+            error.WriteFailed => {
+                std.log.err("failed writing {}\n", .{err});
+                return;
+            },
+        };
         try body.writer.writeAll(content);
         try body.end();
     } else {
