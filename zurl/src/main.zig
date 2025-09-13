@@ -6,16 +6,16 @@ const mem = std.mem;
 const body_max_size: usize = 4096;
 
 pub fn main() !void {
-    const page_alloc = std.heap.page_allocator;
+    const page_alloc: mem.Allocator = std.heap.page_allocator;
 
-    var client = http.Client{ .allocator = page_alloc };
+    var client: http.Client = .{ .allocator = page_alloc };
     defer client.deinit();
 
     const args = try process.argsAlloc(page_alloc);
     defer process.argsFree(page_alloc, args);
 
-    var method = http.Method.GET;
-    var verbose = false;
+    var method: http.Method = .GET;
+    var verbose: bool = false;
     var url: []const u8 = "http://eu.httpbin.org/get";
     var headers: []const u8 = "";
     var data: ?[]u8 = null;
@@ -51,11 +51,14 @@ pub fn main() !void {
 
     var sep = mem.splitSequence(u8, headers, ": ");
     _ = sep.first();
-    const app_type = sep.rest();
+    const app_type: []const u8 = sep.rest();
 
-    const uri = try std.Uri.parse(url);
-    const path = uri.path.percent_encoded;
-    const scheme = uri.scheme;
+    const uri: std.Uri = std.Uri.parse(url) catch |err| {
+        std.log.err("error: {}\n", .{err});
+        return;
+    };
+    const path: []const u8 = uri.path.percent_encoded;
+    const scheme: []const u8 = uri.scheme;
 
     var req_headers: http.Client.Request.Headers = .{};
     switch (method) {
@@ -89,8 +92,8 @@ pub fn main() !void {
     defer req.deinit();
 
     if (verbose) {
-        const port = uri.port orelse (if (mem.eql(u8, scheme, "http")) @as(u16, 80) else @as(u16, 443));
-        const host = req.headers.host.override;
+        const port: u16 = uri.port orelse (if (mem.eql(u8, scheme, "http")) @as(u16, 80) else @as(u16, 443));
+        const host: []const u8 = req.headers.host.override;
         std.debug.print("* Connected to {s} port {d}\n", .{ host, port });
         std.debug.print("> {s} {s} {s}\n", .{ @tagName(method), path, @tagName(req.version) });
         std.debug.print("> Host: {s}\n", .{host});
@@ -108,7 +111,7 @@ pub fn main() !void {
 
     if (data) |content| {
         req.transfer_encoding = .{ .content_length = content.len };
-        var body = try req.sendBody(&.{});
+        var body: http.BodyWriter = try req.sendBody(&.{});
         try body.writer.writeAll(content);
         try body.end();
     } else {
@@ -123,33 +126,32 @@ pub fn main() !void {
     }
 
     if (verbose) {
-        const ver = res.head.version;
-        const status_phrase = res.head.status.phrase().?;
-        const status = res.head.status;
+        const ver: http.Version = res.head.version;
+        const status_phrase: []const u8 = res.head.status.phrase().?;
+        const status: http.Status = res.head.status;
 
         std.debug.print("< {s} {d} {s}\n", .{ @tagName(ver), @intFromEnum(status), status_phrase });
 
-        var iter = res.head.iterateHeaders();
+        var iter: http.HeaderIterator = res.head.iterateHeaders();
         while (iter.next()) |header| {
             std.debug.print("< {s}:{s}\n", .{ header.name, header.value });
         }
         std.debug.print("< \n", .{});
     }
 
-    var resp_wr = std.Io.Writer.Allocating.init(page_alloc);
+    var resp_wr: std.Io.Writer.Allocating = .init(page_alloc);
     defer resp_wr.deinit();
 
     var body_buff: [body_max_size]u8 = undefined;
-    const body_reader = res.request.reader.bodyReader(&body_buff, res.req.response_transfer_encoding, res.request.response_content_length.?);
+    const body_reader = res.request.reader.bodyReader(&body_buff, req.response_transfer_encoding, res.request.response_content_length.?);
 
-    _ = body_reader.stream(&resp_wr.writer, .limited(body_max_size)) catch |err| {
-        switch (err) {
-            error.EndOfStream => {},
-            else => std.log.err("err: {}\n", .{err}),
-        }
-        return;
+    _ = body_reader.stream(&resp_wr.writer, .limited(body_max_size)) catch |err| switch (err) {
+        error.EndOfStream => {},
+        else => {
+            std.log.err("err: {}\n", .{err});
+            return;
+        },
     };
-    const body = resp_wr.written();
-
+    const body: []u8 = resp_wr.written();
     std.debug.print("{s}\n", .{body});
 }
