@@ -1,22 +1,30 @@
 const std = @import("std");
 const Writer = std.Io.Writer;
 
+const Config = struct {
+    linelen: usize = 16,
+    chunklen: usize = 4,
+    endian: bool = false,
+};
+
 pub fn main() !void {
     const pga = std.heap.page_allocator;
     const args = try std.process.argsAlloc(pga);
     defer std.process.argsFree(pga, args);
 
     var i: usize = 1;
-    var chunklen: usize = 2;
-    var little_endian: bool = false;
+    var cliargs = Config{};
 
     while (i < args.len) : (i += 1) {
         const arg = args[i];
-        if (std.mem.eql(u8, arg, "-g")) {
+        if (std.mem.eql(u8, arg, "-e")) {
+            cliargs.endian = true;
+        } else if (std.mem.eql(u8, arg, "-g")) {
             i += 1;
-            chunklen = try std.fmt.parseInt(usize, args[i], 10);
-        } else if (std.mem.eql(u8, arg, "-e")) {
-            little_endian = true;
+            cliargs.chunklen = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "-l")) {
+            i += 1;
+            cliargs.linelen = try std.fmt.parseInt(usize, args[i], 10);
         }
     }
 
@@ -27,28 +35,30 @@ pub fn main() !void {
 
     var stdout = std.fs.File.stdout().writer(&.{});
 
-    try dumpHex(&stdout.interface, buff[0..n], chunklen, little_endian, pga);
+    try dumpHex(pga, &stdout.interface, buff[0..n], cliargs);
 }
 
-fn dumpHex(bw: *Writer, bytes: []const u8, chunk_len: usize, little_endian: bool, alloc: std.mem.Allocator) !void {
-    const linelen: usize = 16;
-    const chunklen: usize = chunk_len;
+fn dumpHex(alloc: std.mem.Allocator, bw: *Writer, bytes: []const u8, args: Config) !void {
+    const linelen: usize = args.linelen;
+    const chunklen: usize = args.chunklen;
 
     var chunks = std.mem.window(u8, bytes, linelen, linelen);
+    var line_offset: usize = 0;
 
     while (chunks.next()) |window| {
         // 1. Print the address.
-        const address = (@intFromPtr(bytes.ptr) + 0x10 * (std.math.divCeil(usize, chunks.index orelse bytes.len, 16) catch unreachable)) - 0x10;
-        try bw.print("{x:0>[1]}  ", .{ address, @sizeOf(usize) * 2 });
+        try bw.print("{x:0>8}  ", .{line_offset});
 
         // 2. Print the bytes.
         var lit = std.mem.window(u8, window, chunklen, chunklen);
         while (lit.next()) |chunk| {
-            const hexbyte = try std.fmt.allocPrint(alloc, "{x}", .{chunk});
-            if (little_endian) {
-                try bw.writeSliceEndian(u8, hexbyte, .little);
+            if (args.endian) {
+                const grp = try std.mem.Allocator.dupe(alloc, u8, chunk);
+                defer alloc.free(grp);
+                std.mem.reverse(u8, grp);
+                try bw.printHex(grp, .lower);
             } else {
-                try bw.writeSliceEndian(u8, hexbyte, .big);
+                try bw.printHex(chunk, .lower);
             }
             try bw.writeByte(' ');
         }
@@ -60,15 +70,12 @@ fn dumpHex(bw: *Writer, bytes: []const u8, chunk_len: usize, little_endian: bool
             if (std.ascii.isPrint(byte)) {
                 try bw.writeByte(byte);
             } else {
-                switch (byte) {
-                    '\n' => try bw.writeAll("␊"),
-                    '\r' => try bw.writeAll("␍"),
-                    '\t' => try bw.writeAll("␉"),
-                    else => try bw.writeByte('.'),
-                }
+                try bw.writeByte('.');
             }
         }
         try bw.writeByte('\n');
+
+        line_offset += window.len;
     }
     try bw.writeByte('\n');
 
