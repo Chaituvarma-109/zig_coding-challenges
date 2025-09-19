@@ -76,11 +76,11 @@ pub fn main() !void {
         const start: usize = arg.seek;
         const end: usize = @max(limit, limit + arg.seek);
 
-        try dumpHex(&fw.interface, buff[start..end], arg);
+        try dumpHex(&fw.interface, buff[start..end], arg, .escape_codes);
     }
 }
 
-fn dumpHex(bw: *Writer, bytes: []const u8, args: Config) !void {
+fn dumpHex(bw: *Writer, bytes: []const u8, args: Config, cfg: std.Io.tty.Config) !void {
     const chunklen: usize = args.chunklen;
     const columns: usize = args.columns;
 
@@ -89,12 +89,14 @@ fn dumpHex(bw: *Writer, bytes: []const u8, args: Config) !void {
 
     while (chunks.next()) |window| {
         // 1. Print the address.
-        line_offset += 1;
-        try bw.print("{x:0>8}  ", .{(line_offset - 1) * columns + args.seek});
+        try cfg.setColor(bw, .dim);
+        try bw.print("{x:0>8}  ", .{line_offset * columns + args.seek});
+        try cfg.setColor(bw, .reset);
 
         // 2. Print the bytes.
         var lit = std.mem.window(u8, window, chunklen, chunklen);
         while (lit.next()) |chunk| {
+            try cfg.setColor(bw, .green);
             if (args.endian) {
                 var iter = std.mem.reverseIterator(chunk);
                 while (iter.next()) |byte| {
@@ -103,6 +105,7 @@ fn dumpHex(bw: *Writer, bytes: []const u8, args: Config) !void {
             } else {
                 try bw.printHex(chunk, .lower);
             }
+            try cfg.setColor(bw, .reset);
             try bw.writeByte(' ');
         }
 
@@ -123,12 +126,15 @@ fn dumpHex(bw: *Writer, bytes: []const u8, args: Config) !void {
         // 3. Print the characters.
         for (window) |byte| {
             if (std.ascii.isPrint(byte)) {
+                try cfg.setColor(bw, .green);
                 try bw.writeByte(byte);
+                try cfg.setColor(bw, .reset);
             } else {
                 try bw.writeByte('.');
             }
         }
         try bw.writeByte('\n');
+        line_offset += 1;
     }
     try bw.flush();
 }
