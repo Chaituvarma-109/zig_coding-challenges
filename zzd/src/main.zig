@@ -64,27 +64,28 @@ pub fn main() !void {
     defer stdout.close();
     var fw: File.Writer = stdout.writer(&wbuff);
 
-    var buff: []u8 = try pga.alloc(u8, file_size);
-    defer pga.free(buff);
-    var fr: File.Reader = file.reader(buff);
-    const n: usize = try fr.read(buff);
+    var buff: [500]u8 = undefined;
+    var fr: File.Reader = file.reader(&buff);
 
     if (arg.revert) {
-        try revertdump(&fw.interface, buff[0..n]);
+        try revertdump(&fr, &fw.interface);
     } else {
-        const limit: usize = @min(arg.linelen orelse n, n);
-        const start: usize = arg.seek;
-        const end: usize = @max(limit, limit + arg.seek);
-
-        try dumpHex(&fw.interface, buff[start..end], arg, .escape_codes);
+        try dumpHex(&fr, &fw.interface, pga, file_size, arg, .escape_codes);
     }
 }
 
-fn dumpHex(bw: *Writer, bytes: []const u8, args: Config, cfg: std.Io.tty.Config) !void {
+fn dumpHex(rd: *File.Reader, bw: *Writer, pga: std.mem.Allocator, file_size: u64, args: Config, cfg: std.Io.tty.Config) !void {
     const chunklen: usize = args.chunklen;
     const columns: usize = args.columns;
 
-    var chunks = std.mem.window(u8, bytes, columns, columns);
+    var buff: []u8 = try pga.alloc(u8, file_size);
+    defer pga.free(buff);
+    const n: usize = try rd.read(buff);
+    const limit: usize = @min(args.linelen orelse n, n);
+    const start: usize = args.seek;
+    const end: usize = @max(limit, limit + args.seek);
+
+    var chunks = std.mem.window(u8, buff[start..end], columns, columns);
     var line_offset: usize = 0;
 
     while (chunks.next()) |window| {
@@ -139,9 +140,8 @@ fn dumpHex(bw: *Writer, bytes: []const u8, args: Config, cfg: std.Io.tty.Config)
     try bw.flush();
 }
 
-fn revertdump(wr: *Writer, hex_data: []const u8) !void {
-    var lines = std.mem.tokenizeAny(u8, hex_data, "\n");
-    while (lines.next()) |line| {
+fn revertdump(rd: *File.Reader, wr: *Writer) !void {
+    while (rd.interface.takeDelimiterExclusive('\n')) |line| {
         // Split by the offset mark
         var parts = std.mem.tokenizeAny(u8, line, ":");
         _ = parts.next(); // Remove offset
@@ -151,6 +151,11 @@ fn revertdump(wr: *Writer, hex_data: []const u8) !void {
         while (hexes.next()) |hexstr| {
             try wr.print("{s}", .{try std.fmt.hexToBytes(&out, hexstr)});
         }
+    } else |err| switch (err) {
+        error.EndOfStream => try wr.flush(),
+        else => {
+            std.debug.print("err: {}\n", .{err});
+            return;
+        },
     }
-    try wr.flush();
 }
