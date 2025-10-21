@@ -10,6 +10,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const vaxis = b.dependency("vaxis", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe_mod.addImport("vaxis", vaxis.module("vaxis"));
+
     const exe = b.addExecutable(.{
         .name = "ztop",
         .root_module = exe_mod,

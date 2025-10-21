@@ -2,8 +2,13 @@
     .name = .ztop,
     .version = "0.0.0",
     .fingerprint = 0xc45e593caaaf3f2f,
-    .minimum_zig_version = "0.14.0",
-    .dependencies = .{},
+    .minimum_zig_version = "0.15.0",
+    .dependencies = .{
+        .vaxis = .{
+            .url = "git+https://github.com/rockorager/libvaxis.git#95b167909f8aaec7f9b2315e6a1f64d9a48afe9b",
+            .hash = "vaxis-0.5.1-BWNV_OAsCQA13jnKNnBh97YjTP4K4YwAT-pkH-RaHlMI",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
