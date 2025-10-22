@@ -17,6 +17,13 @@ pub fn build(b: *std.Build) void {
 
     exe_mod.addImport("vaxis", vaxis.module("vaxis"));
 
+    const zeit = b.dependency("zeit", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe_mod.addImport("zeit", zeit.module("zeit"));
+
     const exe = b.addExecutable(.{
         .name = "ztop",
         .root_module = exe_mod,
