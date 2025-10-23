@@ -90,22 +90,28 @@ const Uptime = struct {
     }
 };
 
-const MemInfo = struct {
-    total: u64,
-    free: u64,
-    available: u64,
-    buffers: u64,
-    cached: u64,
+const MemoryUnit = enum {
+    Bytes,
+    KB,
+    MB,
+    GB,
 
-    fn init() MemInfo {
-        return .{
-            .total = 0,
-            .free = 0,
-            .available = 0,
-            .buffers = 0,
-            .cached = 0,
+    fn next(self: MemoryUnit) MemoryUnit {
+        return switch (self) {
+            .Bytes => .KB,
+            .KB => .MB,
+            .MB => .GB,
+            .GB => .Bytes,
         };
     }
+};
+
+const MemInfo = struct {
+    total: u64 = 0,
+    free: u64 = 0,
+    available: u64 = 0,
+    buffers: u64 = 0,
+    cached: u64 = 0,
 
     fn readMemStats() !MemInfo {
         const f: fs.File = try fs.openFileAbsolute("/proc/meminfo", .{});
@@ -113,7 +119,7 @@ const MemInfo = struct {
 
         var buff: [256]u8 = undefined;
         var fr = f.reader(&buff);
-        var stats: MemInfo = .init();
+        var stats: MemInfo = .{};
 
         while (try fr.interface.takeDelimiter('\n')) |line| {
             var iter = mem.tokenizeAny(u8, line, ": ");
@@ -143,6 +149,31 @@ const Event = union(enum) {
     winsize: vaxis.Winsize,
 };
 
+fn getLoadAvg() ![3]f64 {
+    const f: fs.File = try fs.openFileAbsolute("/proc/loadavg", .{});
+    defer f.close();
+
+    var buff: [2048]u8 = undefined;
+    const n: usize = try f.read(&buff);
+
+    var iter = mem.tokenizeAny(u8, buff[0..n], " ");
+    const avg1 = try fmt.parseFloat(f64, iter.next() orelse "0");
+    const avg2 = try fmt.parseFloat(f64, iter.next() orelse "0");
+    const avg3 = try fmt.parseFloat(f64, iter.next() orelse "0");
+
+    return [3]f64{ avg1, avg2, avg3 };
+}
+
+fn formatMem(unit: MemoryUnit, buff: []u8, value: u64) ![]u8 {
+    const val_f: f64 = @floatFromInt(value);
+    return switch (unit) {
+        .Bytes => try fmt.bufPrint(buff, "{d}B", .{value}),
+        .KB => try fmt.bufPrint(buff, "{d:.1}KB", .{val_f}),
+        .MB => try fmt.bufPrint(buff, "{d:.1}MB", .{val_f / 1024.0}),
+        .GB => try fmt.bufPrint(buff, "{d:.2}GB", .{val_f / 1024.0 / 1024.0}),
+    };
+}
+
 pub fn main() !void {
     var alloc: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = alloc.deinit();
@@ -166,6 +197,7 @@ pub fn main() !void {
 
     var last_update: i64 = 0;
     var prev_stats = CpuStats{};
+    var mem_unit = MemoryUnit.MB;
 
     while (true) {
         while (loop.tryEvent()) |event| {
@@ -173,6 +205,7 @@ pub fn main() !void {
                 .key_press => |key| {
                     if (key.matches('c', .{ .ctrl = true })) return;
                     if (key.matches('q', .{})) return;
+                    if (key.matches('e', .{})) mem_unit = mem_unit.next();
                 },
                 .winsize => |ws| try vx.resize(gpa, tty_writer, ws),
             }
@@ -242,8 +275,19 @@ pub fn main() !void {
 
             // meminfo
             const mem_stats: MemInfo = try .readMemStats();
-            const used: u64 = mem_stats.total - mem_stats.free;
-            const mem_info: []u8 = try fmt.allocPrint(gpa, "Memory: {d:.2} Total, {d:.2} Free, {d:.2} Used, {d:.2} Available", .{ mem_stats.total, mem_stats.free, used, mem_stats.available });
+            const used: u64 = mem_stats.total - mem_stats.available;
+
+            var tbuff: [32]u8 = undefined;
+            var fbuff: [32]u8 = undefined;
+            var abuff: [32]u8 = undefined;
+            var ubuff: [32]u8 = undefined;
+
+            const total = try formatMem(mem_unit, &tbuff, mem_stats.total);
+            const free = try formatMem(mem_unit, &fbuff, mem_stats.free);
+            const used_str = try formatMem(mem_unit, &ubuff, used);
+            const available = try formatMem(mem_unit, &abuff, mem_stats.available);
+
+            const mem_info: []u8 = try fmt.allocPrint(gpa, "Memory: {s} Total, {s} Free, {s} Used, {s} Available", .{ total, free, used_str, available });
             defer gpa.free(mem_info);
 
             _ = win.printSegment(.{ .text = mem_info, .style = .{ .fg = .{ .index = 6 }, .bold = true } }, .{ .row_offset = row });
@@ -260,19 +304,4 @@ pub fn main() !void {
         std.Thread.sleep(100 * time.ns_per_ms);
     }
     tty_writer.flush();
-}
-
-fn getLoadAvg() ![3]f64 {
-    const f: fs.File = try fs.openFileAbsolute("/proc/loadavg", .{});
-    defer f.close();
-
-    var buff: [2048]u8 = undefined;
-    const n: usize = try f.read(&buff);
-
-    var iter = mem.tokenizeAny(u8, buff[0..n], " ");
-    const avg1 = try fmt.parseFloat(f64, iter.next() orelse "0");
-    const avg2 = try fmt.parseFloat(f64, iter.next() orelse "0");
-    const avg3 = try fmt.parseFloat(f64, iter.next() orelse "0");
-
-    return [3]f64{ avg1, avg2, avg3 };
 }
