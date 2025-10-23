@@ -5,6 +5,7 @@ const zeit = @import("zeit");
 const mem = std.mem;
 const fs = std.fs;
 const time = std.time;
+const fmt = std.fmt;
 
 // /proc/loadavg - 15bytes.
 // /proc/uptime - total uptime of the system in seconds , total idle time summed across all cpu cores.
@@ -12,14 +13,14 @@ const time = std.time;
 // /proc/stat - for cpu stats
 
 const CpuStats = struct {
-    user: u64 = 0,
-    nice: u64 = 0,
-    system: u64 = 0,
-    idle: u64 = 0,
-    iowait: u64 = 0,
-    irq: u64 = 0,
-    softirq: u64 = 0,
-    steal: u64 = 0,
+    user: f64 = 0.0,
+    nice: f64 = 0.0,
+    system: f64 = 0.0,
+    idle: f64 = 0.0,
+    iowait: f64 = 0.0,
+    irq: f64 = 0.0,
+    softirq: f64 = 0.0,
+    steal: f64 = 0.0,
 
     fn readCpuStat() !CpuStats {
         const f: fs.File = try fs.openFileAbsolute("/proc/stat", .{});
@@ -34,14 +35,14 @@ const CpuStats = struct {
             var iter = mem.tokenizeScalar(u8, ln, ' ');
             _ = iter.next();
 
-            const user = try std.fmt.parseInt(u64, iter.next() orelse "0", 10);
-            const nice = try std.fmt.parseInt(u64, iter.next() orelse "0", 10);
-            const system = try std.fmt.parseInt(u64, iter.next() orelse "0", 10);
-            const idle = try std.fmt.parseInt(u64, iter.next() orelse "0", 10);
-            const iowait = try std.fmt.parseInt(u64, iter.next() orelse "0", 10);
-            const irq = try std.fmt.parseInt(u64, iter.next() orelse "0", 10);
-            const softirq = try std.fmt.parseInt(u64, iter.next() orelse "0", 10);
-            const steal = try std.fmt.parseInt(u64, iter.next() orelse "0", 10);
+            const user = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const nice = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const system = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const idle = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const iowait = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const irq = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const softirq = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const steal = try fmt.parseFloat(f64, iter.next() orelse "0.0");
 
             return CpuStats{
                 .user = user,
@@ -73,7 +74,7 @@ const Uptime = struct {
 
         var iter = mem.tokenizeAny(u8, buff[0..n], " ");
         const seconds_str: []const u8 = iter.next() orelse return error.ParseError;
-        const seconds: f64 = try std.fmt.parseFloat(f64, seconds_str);
+        const seconds: f64 = try fmt.parseFloat(f64, seconds_str);
 
         const total_secs = @as(u64, @intFromFloat(seconds));
         const days = total_secs / 86400;
@@ -118,7 +119,7 @@ const MemInfo = struct {
             var iter = mem.tokenizeAny(u8, line, ": ");
             const key: []const u8 = iter.next() orelse continue;
             const value_str: []const u8 = iter.next() orelse continue;
-            const value: u64 = std.fmt.parseInt(u64, value_str, 10) catch continue;
+            const value: u64 = fmt.parseInt(u64, value_str, 10) catch continue;
 
             if (mem.eql(u8, key, "MemTotal")) {
                 stats.total = value;
@@ -171,6 +172,7 @@ pub fn main() !void {
             switch (event) {
                 .key_press => |key| {
                     if (key.matches('c', .{ .ctrl = true })) return;
+                    if (key.matches('q', .{})) return;
                 },
                 .winsize => |ws| try vx.resize(gpa, tty_writer, ws),
             }
@@ -193,7 +195,7 @@ pub fn main() !void {
             const dt = now_local.time();
 
             const uptime: Uptime = try .readUptime();
-            const uptime_header: []u8 = try std.fmt.allocPrint(gpa, "ztop - {d:0>2}:{d:0>2}:{d:0>2} | uptime: {d:0>2}:{d:0>2}", .{ dt.hour, dt.minute, dt.second, uptime.hours, uptime.minutes });
+            const uptime_header: []u8 = try fmt.allocPrint(gpa, "ztop - {d:0>2}:{d:0>2}:{d:0>2} | uptime: {d:0>2}:{d:0>2}", .{ dt.hour, dt.minute, dt.second, uptime.hours, uptime.minutes });
             defer gpa.free(uptime_header);
 
             var row: u16 = 0;
@@ -202,7 +204,7 @@ pub fn main() !void {
 
             // get load avg
             const ld: [3]f64 = try getLoadAvg();
-            const load_avg: []u8 = try std.fmt.allocPrint(gpa, "load avg: {d:.2}, {d:.2}, {d:.2}", .{ ld[0], ld[1], ld[2] });
+            const load_avg: []u8 = try fmt.allocPrint(gpa, "load avg: {d:.2}, {d:.2}, {d:.2}", .{ ld[0], ld[1], ld[2] });
             defer gpa.free(load_avg);
 
             _ = win.printSegment(.{ .text = load_avg, .style = .{ .fg = .{ .index = 6 }, .bold = true } }, .{ .row_offset = row });
@@ -221,14 +223,14 @@ pub fn main() !void {
             const steal_diff = cpu_stats.steal - prev_stats.steal;
             const total_diff = user_diff + system_diff + nice_diff + idle_diff + iowait_diff + irq_diff + softirq_diff + steal_diff;
 
-            const user_pct = (@as(f64, @floatFromInt(user_diff)) / @as(f64, @floatFromInt(total_diff))) * 100.0;
-            const sys_pct = (@as(f64, @floatFromInt(system_diff)) / @as(f64, @floatFromInt(total_diff))) * 100.0;
-            const nice_pct = (@as(f64, @floatFromInt(nice_diff)) / @as(f64, @floatFromInt(total_diff))) * 100.0;
-            const idle_pct = (@as(f64, @floatFromInt(idle_diff)) / @as(f64, @floatFromInt(total_diff))) * 100.0;
-            const iowait_pct = (@as(f64, @floatFromInt(iowait_diff)) / @as(f64, @floatFromInt(total_diff))) * 100.0;
-            const irq_pct = (@as(f64, @floatFromInt(irq_diff)) / @as(f64, @floatFromInt(total_diff))) * 100.0;
-            const softirq_pct = (@as(f64, @floatFromInt(softirq_diff)) / @as(f64, @floatFromInt(total_diff))) * 100.0;
-            const steal_pct = (@as(f64, @floatFromInt(steal_diff)) / @as(f64, @floatFromInt(total_diff))) * 100.0;
+            const user_pct = (user_diff / total_diff) * 100.0;
+            const sys_pct = (system_diff / total_diff) * 100.0;
+            const nice_pct = (nice_diff / total_diff) * 100.0;
+            const idle_pct = (idle_diff / total_diff) * 100.0;
+            const iowait_pct = (iowait_diff / total_diff) * 100.0;
+            const irq_pct = (irq_diff / total_diff) * 100.0;
+            const softirq_pct = (softirq_diff / total_diff) * 100.0;
+            const steal_pct = (steal_diff / total_diff) * 100.0;
 
             const cpu_stat = try std.fmt.allocPrint(gpa, "% Cpu: {d:.1} us, {d:.1} sy, {d:.1} ni, {d:.1} id, {d:.1} wa, {d:.1} hi, {d:.1} si, {d:.1} st", .{ user_pct, sys_pct, nice_pct, idle_pct, iowait_pct, irq_pct, softirq_pct, steal_pct });
             defer gpa.free(cpu_stat);
@@ -241,11 +243,17 @@ pub fn main() !void {
             // meminfo
             const mem_stats: MemInfo = try .readMemStats();
             const used: u64 = mem_stats.total - mem_stats.free;
-            const mem_info: []u8 = try std.fmt.allocPrint(gpa, "Memory: {d:.2} Total, {d:.2} Free, {d:.2} Used, {d:.2} Available", .{ mem_stats.total, mem_stats.free, used, mem_stats.available });
+            const mem_info: []u8 = try fmt.allocPrint(gpa, "Memory: {d:.2} Total, {d:.2} Free, {d:.2} Used, {d:.2} Available", .{ mem_stats.total, mem_stats.free, used, mem_stats.available });
             defer gpa.free(mem_info);
 
             _ = win.printSegment(.{ .text = mem_info, .style = .{ .fg = .{ .index = 6 }, .bold = true } }, .{ .row_offset = row });
             row += 1;
+
+            // Footer
+            if (win.height > 2) {
+                const footer_row = win.height - 2;
+                _ = win.printSegment(.{ .text = "Press 'q' to quit, 'e' to toggle memory units", .style = .{ .fg = .{ .index = 8 } } }, .{ .row_offset = footer_row });
+            }
 
             try vx.render(tty_writer);
         }
@@ -262,9 +270,9 @@ fn getLoadAvg() ![3]f64 {
     const n: usize = try f.read(&buff);
 
     var iter = mem.tokenizeAny(u8, buff[0..n], " ");
-    const avg1 = try std.fmt.parseFloat(f64, iter.next() orelse "0");
-    const avg2 = try std.fmt.parseFloat(f64, iter.next() orelse "0");
-    const avg3 = try std.fmt.parseFloat(f64, iter.next() orelse "0");
+    const avg1 = try fmt.parseFloat(f64, iter.next() orelse "0");
+    const avg2 = try fmt.parseFloat(f64, iter.next() orelse "0");
+    const avg3 = try fmt.parseFloat(f64, iter.next() orelse "0");
 
     return [3]f64{ avg1, avg2, avg3 };
 }
