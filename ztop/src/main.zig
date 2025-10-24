@@ -144,6 +144,93 @@ const MemInfo = struct {
     }
 };
 
+const Process = struct {
+    pid: u32,
+    name: []const u8,
+    state: u8,
+    utime: u64,
+    stime: u64,
+    threads: u32,
+    vsize: u64,
+    rss: u64,
+
+    const Processes = std.MultiArrayList(Process);
+
+    fn listProcess(alloc: mem.Allocator) !Processes {
+        var process = Processes{};
+        // defer process.deinit(alloc);
+
+        var proc_dir = try fs.openDirAbsolute("/proc", .{ .iterate = true });
+        defer proc_dir.close();
+
+        var dir_iter = proc_dir.iterate();
+        while (try dir_iter.next()) |entry| {
+            if (entry.kind != .directory) continue;
+
+            const pid = fmt.parseInt(u32, entry.name, 10) catch continue;
+
+            var buff: [256]u8 = undefined;
+            const pid_path = try fmt.bufPrint(&buff, "/proc/{d}/stat", .{pid});
+
+            var rbuff: [1024]u8 = undefined;
+            const f = fs.openFileAbsolute(pid_path, .{}) catch continue;
+            defer f.close();
+
+            const n = try f.read(&rbuff);
+            const content = rbuff[0..n];
+
+            const start_paren: usize = mem.indexOf(u8, content, "(") orelse continue;
+            const last_paren: usize = mem.lastIndexOf(u8, content, ")") orelse continue;
+
+            const name = content[start_paren + 1 .. last_paren];
+
+            const name_cp = try alloc.alloc(u8, name.len);
+            defer alloc.free(name_cp);
+            @memcpy(name_cp, name);
+
+            const after_name = content[last_paren + 2 ..];
+            var fields = mem.tokenizeScalar(u8, after_name, ' ');
+
+            const state = (fields.next() orelse "?")[0];
+            _ = fields.next(); // ppid
+            _ = fields.next(); // pgrp
+            _ = fields.next(); // session
+            _ = fields.next(); // tty_nr
+            _ = fields.next(); // tpgid
+            _ = fields.next(); // flags
+            _ = fields.next(); // minflt
+            _ = fields.next(); // cminflt
+            _ = fields.next(); // majflt
+            _ = fields.next(); // cmajflt
+            const utime = try std.fmt.parseInt(u64, fields.next() orelse "0", 10);
+            const stime = try std.fmt.parseInt(u64, fields.next() orelse "0", 10);
+            _ = fields.next(); // cutime
+            _ = fields.next(); // cstime
+            _ = fields.next(); // priority
+            _ = fields.next(); // nice
+            const threads = try std.fmt.parseInt(u32, fields.next() orelse "0", 10);
+            _ = fields.next(); // itrealvalue
+            _ = fields.next(); // starttime
+            const vsize = try std.fmt.parseInt(u64, fields.next() orelse "0", 10);
+            const rss = try std.fmt.parseInt(u64, fields.next() orelse "0", 10);
+
+            const p: Process = .{
+                .pid = pid,
+                .name = name,
+                .state = state,
+                .utime = utime,
+                .stime = stime,
+                .threads = threads,
+                .vsize = vsize,
+                .rss = rss * 4096,
+            };
+
+            try process.append(alloc, p);
+        }
+        return process;
+    }
+};
+
 const Event = union(enum) {
     key_press: vaxis.Key,
     winsize: vaxis.Winsize,
@@ -292,6 +379,29 @@ pub fn main() !void {
 
             _ = win.printSegment(.{ .text = mem_info, .style = .{ .fg = .{ .index = 6 }, .bold = true } }, .{ .row_offset = row });
             row += 1;
+
+            // Process listing
+            _ = win.printSegment(.{ .text = "PID      COMMAND          STATE  THREADS    RSS      VSIZE", .style = .{ .bold = true, .fg = .{ .index = 3 } } }, .{ .row_offset = row });
+            row += 1;
+
+            var processess = try Process.listProcess(gpa);
+            defer processess.deinit(gpa);
+            const process = processess.slice();
+
+            for (process.items(.pid), process.items(.name), process.items(.state), process.items(.utime), process.items(.stime), process.items(.threads), process.items(.vsize), process.items(.rss)) |*pid, *name, *state, *utime, *stime, *threads, *vsize, *rss| {
+                _ = utime.*;
+                _ = stime.*;
+                var rss_buf: [32]u8 = undefined;
+                var vsize_buf: [32]u8 = undefined;
+                const rss_str = try formatMem(mem_unit, &rss_buf, rss.*);
+                const vsize_str = try formatMem(mem_unit, &vsize_buf, vsize.*);
+
+                const process_ln = try fmt.allocPrint(gpa, "{d} {s: <16} {c}      {d}   {s: <8} {s: <10}", .{ pid.*, name.*, state.*, threads.*, rss_str, vsize_str });
+                defer gpa.free(process_ln);
+
+                _ = win.printSegment(.{ .text = process_ln, .style = .{ .fg = .{ .index = 2 } } }, .{ .row_offset = row });
+                row += 1;
+            }
 
             // Footer
             if (win.height > 2) {
