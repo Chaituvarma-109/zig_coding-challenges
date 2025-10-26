@@ -158,7 +158,12 @@ const Process = struct {
 
     fn listProcess(alloc: mem.Allocator) !Processes {
         var process = Processes{};
-        // defer process.deinit(alloc);
+        errdefer {
+            for (process.items(.name)) |*name| {
+                alloc.free(name.*);
+            }
+            process.deinit(alloc);
+        }
 
         var proc_dir = try fs.openDirAbsolute("/proc", .{ .iterate = true });
         defer proc_dir.close();
@@ -184,9 +189,8 @@ const Process = struct {
 
             const name = content[start_paren + 1 .. last_paren];
 
-            const name_cp = try alloc.alloc(u8, name.len);
-            defer alloc.free(name_cp);
-            @memcpy(name_cp, name);
+            const name_cp = try alloc.dupe(u8, name);
+            errdefer alloc.free(name_cp);
 
             const after_name = content[last_paren + 2 ..];
             var fields = mem.tokenizeScalar(u8, after_name, ' ');
@@ -216,7 +220,7 @@ const Process = struct {
 
             const p: Process = .{
                 .pid = pid,
-                .name = name,
+                .name = name_cp,
                 .state = state,
                 .utime = utime,
                 .stime = stime,
@@ -234,6 +238,7 @@ const Process = struct {
 const Event = union(enum) {
     key_press: vaxis.Key,
     winsize: vaxis.Winsize,
+    table_upd,
 };
 
 fn getLoadAvg() ![3]f64 {
@@ -282,16 +287,32 @@ pub fn main() !void {
     try vx.enterAltScreen(tty_writer);
     try vx.queryTerminal(tty_writer, 1 * time.ns_per_ms);
 
+    const active_bg: vaxis.Cell.Color = .{ .rgb = .{ 64, 128, 255 } };
+    const selected_bg: vaxis.Cell.Color = .{ .rgb = .{ 32, 64, 255 } };
+
+    var tbl: vaxis.widgets.Table.TableContext = .{
+        .selected_bg = selected_bg,
+        .active_bg = active_bg,
+        .header_names = .{ .custom = &.{ "PID", "COMMAND", "STATE", "THREADS", "RSS", "VSIZE" } },
+        .header_borders = true,
+    };
+    defer if (tbl.sel_rows) |rows| gpa.free(rows);
+
     var last_update: i64 = 0;
     var prev_stats = CpuStats{};
     var mem_unit = MemoryUnit.MB;
 
+    var event_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer event_arena.deinit();
+
     while (true) {
+        defer _ = event_arena.reset(.retain_capacity);
+        const event_alloc = event_arena.allocator();
+
         while (loop.tryEvent()) |event| {
             switch (event) {
                 .key_press => |key| {
-                    if (key.matches('c', .{ .ctrl = true })) return;
-                    if (key.matches('q', .{})) return;
+                    if (key.matches('c', .{ .ctrl = true }) or key.matches('q', .{})) return;
                     if (key.matches('e', .{})) mem_unit = mem_unit.next();
                 },
                 .winsize => |ws| try vx.resize(gpa, tty_writer, ws),
@@ -378,30 +399,27 @@ pub fn main() !void {
             defer gpa.free(mem_info);
 
             _ = win.printSegment(.{ .text = mem_info, .style = .{ .fg = .{ .index = 6 }, .bold = true } }, .{ .row_offset = row });
-            row += 1;
+            row += 2;
 
             // Process listing
-            _ = win.printSegment(.{ .text = "PID      COMMAND          STATE  THREADS    RSS      VSIZE", .style = .{ .bold = true, .fg = .{ .index = 3 } } }, .{ .row_offset = row });
-            row += 1;
-
             var processess = try Process.listProcess(gpa);
-            defer processess.deinit(gpa);
-            const process = processess.slice();
-
-            for (process.items(.pid), process.items(.name), process.items(.state), process.items(.utime), process.items(.stime), process.items(.threads), process.items(.vsize), process.items(.rss)) |*pid, *name, *state, *utime, *stime, *threads, *vsize, *rss| {
-                _ = utime.*;
-                _ = stime.*;
-                var rss_buf: [32]u8 = undefined;
-                var vsize_buf: [32]u8 = undefined;
-                const rss_str = try formatMem(mem_unit, &rss_buf, rss.*);
-                const vsize_str = try formatMem(mem_unit, &vsize_buf, vsize.*);
-
-                const process_ln = try fmt.allocPrint(gpa, "{d} {s: <16} {c}      {d}   {s: <8} {s: <10}", .{ pid.*, name.*, state.*, threads.*, rss_str, vsize_str });
-                defer gpa.free(process_ln);
-
-                _ = win.printSegment(.{ .text = process_ln, .style = .{ .fg = .{ .index = 2 } } }, .{ .row_offset = row });
-                row += 1;
+            defer {
+                for (processess.items(.name)) |*name| {
+                    gpa.free(name.*);
+                }
+                processess.deinit(gpa);
             }
+
+            const table_height = if (win.height > row + 3) win.height - row - 3 else 10;
+            const table_win = win.child(.{
+                .x_off = 0,
+                .y_off = row,
+                .width = win.width,
+                .height = table_height,
+            });
+            try vaxis.widgets.Table.drawTable(event_alloc, table_win, processess, &tbl);
+
+            row += table_height;
 
             // Footer
             if (win.height > 2) {
