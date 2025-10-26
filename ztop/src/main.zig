@@ -150,6 +150,8 @@ const Process = struct {
     state: u8,
     utime: u64,
     stime: u64,
+    priority: i32,
+    nice: i64,
     threads: u32,
     vsize: u64,
     rss: u64,
@@ -206,17 +208,17 @@ const Process = struct {
             _ = fields.next(); // cminflt
             _ = fields.next(); // majflt
             _ = fields.next(); // cmajflt
-            const utime = try std.fmt.parseInt(u64, fields.next() orelse "0", 10);
-            const stime = try std.fmt.parseInt(u64, fields.next() orelse "0", 10);
+            const utime = try fmt.parseInt(u64, fields.next() orelse "0", 10);
+            const stime = try fmt.parseInt(u64, fields.next() orelse "0", 10);
             _ = fields.next(); // cutime
             _ = fields.next(); // cstime
-            _ = fields.next(); // priority
-            _ = fields.next(); // nice
-            const threads = try std.fmt.parseInt(u32, fields.next() orelse "0", 10);
+            const priority = try fmt.parseInt(i32, fields.next() orelse "0", 10);
+            const nice = try fmt.parseInt(i64, fields.next() orelse "0", 10);
+            const threads = try fmt.parseInt(u32, fields.next() orelse "0", 10);
             _ = fields.next(); // itrealvalue
             _ = fields.next(); // starttime
-            const vsize = try std.fmt.parseInt(u64, fields.next() orelse "0", 10);
-            const rss = try std.fmt.parseInt(u64, fields.next() orelse "0", 10);
+            const vsize = try fmt.parseInt(u64, fields.next() orelse "0", 10);
+            const rss = try fmt.parseInt(u64, fields.next() orelse "0", 10);
 
             const p: Process = .{
                 .pid = pid,
@@ -224,6 +226,8 @@ const Process = struct {
                 .state = state,
                 .utime = utime,
                 .stime = stime,
+                .priority = priority,
+                .nice = nice,
                 .threads = threads,
                 .vsize = vsize,
                 .rss = rss * 4096,
@@ -238,7 +242,6 @@ const Process = struct {
 const Event = union(enum) {
     key_press: vaxis.Key,
     winsize: vaxis.Winsize,
-    table_upd,
 };
 
 fn getLoadAvg() ![3]f64 {
@@ -293,7 +296,7 @@ pub fn main() !void {
     var tbl: vaxis.widgets.Table.TableContext = .{
         .selected_bg = selected_bg,
         .active_bg = active_bg,
-        .header_names = .{ .custom = &.{ "PID", "COMMAND", "STATE", "THREADS", "RSS", "VSIZE" } },
+        .header_names = .{ .custom = &.{ "PID", "COMMAND", "STATE", "UTIME", "STIME", "PRIORITY", "NICE", "THREADS", "RSS", "VSIZE" } },
         .header_borders = true,
     };
     defer if (tbl.sel_rows) |rows| gpa.free(rows);
