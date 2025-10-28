@@ -238,10 +238,10 @@ const Process = struct {
             _ = fields.next(); // cmajflt
             const stime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
             const utime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
-            _ = fields.next(); //cutime
-            _ = fields.next(); //cstime
-            // const cutime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
-            // const cstime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
+            // _ = fields.next(); //cutime
+            // _ = fields.next(); //cstime
+            const cutime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
+            const cstime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
             const priority = try fmt.parseInt(i32, fields.next() orelse "0", 10);
             const nice = try fmt.parseInt(i64, fields.next() orelse "0", 10);
             const threads = try fmt.parseUnsigned(u32, fields.next() orelse "0", 10);
@@ -252,15 +252,21 @@ const Process = struct {
 
             const utime_sec = utime / clock_tcks;
             const stime_sec = stime / clock_tcks;
+            const cutime_sec = cutime / clock_tcks;
+            const cstime_sec = cstime / clock_tcks;
             const starttime_sec = starttime / clock_tcks;
 
             const process_elapsed_sec = if (uptime_secs > starttime_sec) uptime_secs - starttime_sec else 1;
-            const process_usage_sec = utime_sec + stime_sec;
-            const process_usage = if (process_elapsed_sec > 0) @min(process_usage_sec * 100 / process_elapsed_sec, 9999) else 0;
+            const process_usage_sec = utime_sec + stime_sec + cutime_sec + cstime_sec;
+            // const process_usage = if (process_elapsed_sec > 0) @min(process_usage_sec * 100 / process_elapsed_sec, 9999) else 0;
+            const cpu_usage_float: f64 = @floatFromInt(process_usage_sec);
+            const elapsed_float: f64 = @floatFromInt(process_elapsed_sec);
+            const process_usage = if (process_elapsed_sec > 0) @as(u64, @intFromFloat(@min(cpu_usage_float / elapsed_float * 100.0, 9999.0))) else 0;
 
-            const hours = (process_usage_sec % 86400) / 3600;
-            const minutes = (process_usage_sec % 3600) / 60;
-            const ptime = try fmt.allocPrint(alloc, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hours, minutes, process_usage_sec });
+            const minutes = process_usage_sec / 60;
+            const seconds = process_usage_sec % 60;
+            const centiseconds = ((utime + stime) % clock_tcks) * 100 / clock_tcks;
+            const ptime = try fmt.allocPrint(alloc, "{d:0>2}:{d:0>2}:{d:0>2}", .{ minutes, seconds, centiseconds });
             errdefer alloc.free(ptime);
 
             const p: Process = .{
@@ -452,6 +458,16 @@ pub fn main() !void {
                 }
                 processess.deinit(gpa);
             }
+            const SortContext = struct {
+                cpuPercs: []const u64,
+
+                pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
+                    return ctx.cpuPercs[a_index] > ctx.cpuPercs[b_index];
+                }
+            };
+
+            const cpuPercs = processess.items(.cpuPerc);
+            processess.sort(SortContext{ .cpuPercs = cpuPercs });
 
             const table_height = if (win.height > row + 3) win.height - row - 3 else 10;
             const table_win = win.child(.{
