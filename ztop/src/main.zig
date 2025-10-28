@@ -12,6 +12,9 @@ const fmt = std.fmt;
 // /proc/meminfo - total, free, available, buffer, cached.
 // /proc/stat - for cpu stats
 
+// os.linux.sysinfo() - uptime, loads, totalram, freeram, sharedram etc
+// process.totalSystemMemory() - for linux calls os.linux.info
+
 const CpuStats = struct {
     user: f64 = 0.0,
     nice: f64 = 0.0,
@@ -104,6 +107,17 @@ const MemoryUnit = enum {
             .GB => .Bytes,
         };
     }
+
+    fn formatMem(self: MemoryUnit, value: u64) ![]u8 {
+        const alloc = std.heap.page_allocator;
+        const val_f: f64 = @floatFromInt(value);
+        return switch (self) {
+            .Bytes => try fmt.allocPrint(alloc, "{d}B", .{value}),
+            .KB => try fmt.allocPrint(alloc, "{d:.1}KB", .{val_f}),
+            .MB => try fmt.allocPrint(alloc, "{d:.1}MB", .{val_f / 1024.0}),
+            .GB => try fmt.allocPrint(alloc, "{d:.2}GB", .{val_f / 1024.0 / 1024.0}),
+        };
+    }
 };
 
 const MemInfo = struct {
@@ -112,6 +126,10 @@ const MemInfo = struct {
     available: u64 = 0,
     buffers: u64 = 0,
     cached: u64 = 0,
+    swapTotal: u64 = 0,
+    swapFree: u64 = 0,
+    srclaim: u64 = 0,
+    shmem: u64 = 0,
 
     fn readMemStats() !MemInfo {
         const f: fs.File = try fs.openFileAbsolute("/proc/meminfo", .{});
@@ -137,6 +155,14 @@ const MemInfo = struct {
                 stats.buffers = value;
             } else if (mem.eql(u8, key, "Cached")) {
                 stats.cached = value;
+            } else if (mem.eql(u8, key, "SwapTotal")) {
+                stats.swapTotal = value;
+            } else if (mem.eql(u8, key, "SwapFree")) {
+                stats.swapFree = value;
+            } else if (mem.eql(u8, key, "Shmem")) {
+                stats.shmem = value;
+            } else if (mem.eql(u8, key, "SReclaimable")) {
+                stats.srclaim = value;
             }
         }
 
@@ -174,7 +200,7 @@ const Process = struct {
         while (try dir_iter.next()) |entry| {
             if (entry.kind != .directory) continue;
 
-            const pid = fmt.parseInt(u32, entry.name, 10) catch continue;
+            const pid = fmt.parseUnsigned(u32, entry.name, 10) catch continue;
 
             var buff: [256]u8 = undefined;
             const pid_path = try fmt.bufPrint(&buff, "/proc/{d}/stat", .{pid});
@@ -208,13 +234,13 @@ const Process = struct {
             _ = fields.next(); // cminflt
             _ = fields.next(); // majflt
             _ = fields.next(); // cmajflt
-            const utime = try fmt.parseInt(u64, fields.next() orelse "0", 10);
-            const stime = try fmt.parseInt(u64, fields.next() orelse "0", 10);
+            const stime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
+            const utime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
             _ = fields.next(); // cutime
             _ = fields.next(); // cstime
             const priority = try fmt.parseInt(i32, fields.next() orelse "0", 10);
             const nice = try fmt.parseInt(i64, fields.next() orelse "0", 10);
-            const threads = try fmt.parseInt(u32, fields.next() orelse "0", 10);
+            const threads = try fmt.parseUnsigned(u32, fields.next() orelse "0", 10);
             _ = fields.next(); // itrealvalue
             _ = fields.next(); // starttime
             const vsize = try fmt.parseInt(u64, fields.next() orelse "0", 10);
@@ -239,11 +265,6 @@ const Process = struct {
     }
 };
 
-const Event = union(enum) {
-    key_press: vaxis.Key,
-    winsize: vaxis.Winsize,
-};
-
 fn getLoadAvg() ![3]f64 {
     const f: fs.File = try fs.openFileAbsolute("/proc/loadavg", .{});
     defer f.close();
@@ -259,16 +280,6 @@ fn getLoadAvg() ![3]f64 {
     return [3]f64{ avg1, avg2, avg3 };
 }
 
-fn formatMem(unit: MemoryUnit, buff: []u8, value: u64) ![]u8 {
-    const val_f: f64 = @floatFromInt(value);
-    return switch (unit) {
-        .Bytes => try fmt.bufPrint(buff, "{d}B", .{value}),
-        .KB => try fmt.bufPrint(buff, "{d:.1}KB", .{val_f}),
-        .MB => try fmt.bufPrint(buff, "{d:.1}MB", .{val_f / 1024.0}),
-        .GB => try fmt.bufPrint(buff, "{d:.2}GB", .{val_f / 1024.0 / 1024.0}),
-    };
-}
-
 pub fn main() !void {
     var alloc: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = alloc.deinit();
@@ -282,7 +293,10 @@ pub fn main() !void {
     var vx = try vaxis.init(gpa, .{});
     defer vx.deinit(gpa, tty_writer);
 
-    var loop: vaxis.Loop(Event) = .{ .tty = &tty, .vaxis = &vx };
+    var loop: vaxis.Loop(union(enum) {
+        key_press: vaxis.Key,
+        winsize: vaxis.Winsize,
+    }) = .{ .tty = &tty, .vaxis = &vx };
     try loop.init();
     try loop.start();
     defer loop.stop();
@@ -386,22 +400,29 @@ pub fn main() !void {
 
             // meminfo
             const mem_stats: MemInfo = try .readMemStats();
-            const used: u64 = mem_stats.total - mem_stats.available;
+            const used: u64 = mem_stats.total - (mem_stats.free + mem_stats.buffers + mem_stats.cached);
+            const swap_used: u64 = mem_stats.swapTotal - mem_stats.swapFree;
+            const buff_cache = mem_stats.buffers + (mem_stats.cached + mem_stats.srclaim);
 
-            var tbuff: [32]u8 = undefined;
-            var fbuff: [32]u8 = undefined;
-            var abuff: [32]u8 = undefined;
-            var ubuff: [32]u8 = undefined;
-
-            const total = try formatMem(mem_unit, &tbuff, mem_stats.total);
-            const free = try formatMem(mem_unit, &fbuff, mem_stats.free);
-            const used_str = try formatMem(mem_unit, &ubuff, used);
-            const available = try formatMem(mem_unit, &abuff, mem_stats.available);
+            const total = try mem_unit.formatMem(mem_stats.total);
+            const free = try mem_unit.formatMem(mem_stats.free);
+            const used_str = try mem_unit.formatMem(used);
+            const available = try mem_unit.formatMem(mem_stats.available);
+            const swap_total = try mem_unit.formatMem(mem_stats.swapTotal);
+            const swap_free = try mem_unit.formatMem(mem_stats.swapFree);
+            const swap_used_str = try mem_unit.formatMem(swap_used);
+            const buff_cache_str = try mem_unit.formatMem(buff_cache);
 
             const mem_info: []u8 = try fmt.allocPrint(gpa, "Memory: {s} Total, {s} Free, {s} Used, {s} Available", .{ total, free, used_str, available });
             defer gpa.free(mem_info);
 
+            const swap_info: []u8 = try fmt.allocPrint(gpa, "Swap Memory: {s} Total, {s} Free, {s} Used {s} buff/cache", .{ swap_total, swap_free, swap_used_str, buff_cache_str });
+            defer gpa.free(swap_info);
+
             _ = win.printSegment(.{ .text = mem_info, .style = .{ .fg = .{ .index = 6 }, .bold = true } }, .{ .row_offset = row });
+            row += 1;
+
+            _ = win.printSegment(.{ .text = swap_info, .style = .{ .fg = .{ .index = 6 }, .bold = true } }, .{ .row_offset = row });
             row += 2;
 
             // Process listing
@@ -426,7 +447,7 @@ pub fn main() !void {
 
             // Footer
             if (win.height > 2) {
-                const footer_row = win.height - 2;
+                const footer_row = win.height - 1;
                 _ = win.printSegment(.{ .text = "Press 'q' to quit, 'e' to toggle memory units", .style = .{ .fg = .{ .index = 8 } } }, .{ .row_offset = footer_row });
             }
 
