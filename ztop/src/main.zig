@@ -174,17 +174,17 @@ const Process = struct {
     pid: u32,
     name: []const u8,
     state: u8,
-    utime: u64,
-    stime: u64,
     priority: i32,
     nice: i64,
     threads: u32,
     vsize: u64,
     rss: u64,
+    cpuPerc: u64,
+    proc_time: []const u8,
 
     const Processes = std.MultiArrayList(Process);
 
-    fn listProcess(alloc: mem.Allocator) !Processes {
+    fn listProcess(alloc: mem.Allocator, uptime_secs: u64) !Processes {
         var process = Processes{};
         errdefer {
             for (process.items(.name)) |*name| {
@@ -212,6 +212,8 @@ const Process = struct {
             const n = try f.read(&rbuff);
             const content = rbuff[0..n];
 
+            const clock_tcks: u64 = 100;
+
             const start_paren: usize = mem.indexOf(u8, content, "(") orelse continue;
             const last_paren: usize = mem.lastIndexOf(u8, content, ")") orelse continue;
 
@@ -236,27 +238,42 @@ const Process = struct {
             _ = fields.next(); // cmajflt
             const stime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
             const utime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
-            _ = fields.next(); // cutime
-            _ = fields.next(); // cstime
+            _ = fields.next(); //cutime
+            _ = fields.next(); //cstime
+            // const cutime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
+            // const cstime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
             const priority = try fmt.parseInt(i32, fields.next() orelse "0", 10);
             const nice = try fmt.parseInt(i64, fields.next() orelse "0", 10);
             const threads = try fmt.parseUnsigned(u32, fields.next() orelse "0", 10);
             _ = fields.next(); // itrealvalue
-            _ = fields.next(); // starttime
+            const starttime = try fmt.parseUnsigned(u64, fields.next() orelse "0", 10);
             const vsize = try fmt.parseInt(u64, fields.next() orelse "0", 10);
             const rss = try fmt.parseInt(u64, fields.next() orelse "0", 10);
+
+            const utime_sec = utime / clock_tcks;
+            const stime_sec = stime / clock_tcks;
+            const starttime_sec = starttime / clock_tcks;
+
+            const process_elapsed_sec = if (uptime_secs > starttime_sec) uptime_secs - starttime_sec else 1;
+            const process_usage_sec = utime_sec + stime_sec;
+            const process_usage = if (process_elapsed_sec > 0) @min(process_usage_sec * 100 / process_elapsed_sec, 9999) else 0;
+
+            const hours = (process_usage_sec % 86400) / 3600;
+            const minutes = (process_usage_sec % 3600) / 60;
+            const ptime = try fmt.allocPrint(alloc, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hours, minutes, process_usage_sec });
+            errdefer alloc.free(ptime);
 
             const p: Process = .{
                 .pid = pid,
                 .name = name_cp,
                 .state = state,
-                .utime = utime,
-                .stime = stime,
                 .priority = priority,
                 .nice = nice,
                 .threads = threads,
                 .vsize = vsize,
                 .rss = rss * 4096,
+                .cpuPerc = process_usage,
+                .proc_time = ptime,
             };
 
             try process.append(alloc, p);
@@ -310,7 +327,7 @@ pub fn main() !void {
     var tbl: vaxis.widgets.Table.TableContext = .{
         .selected_bg = selected_bg,
         .active_bg = active_bg,
-        .header_names = .{ .custom = &.{ "PID", "COMMAND", "STATE", "UTIME", "STIME", "PRIORITY", "NICE", "THREADS", "RSS", "VSIZE" } },
+        .header_names = .{ .custom = &.{ "PID", "COMMAND", "STATE", "PRIORITY", "NICE", "THREADS", "RSS", "VSIZE", "%CPU", "TIME+" } },
         .header_borders = true,
     };
     defer if (tbl.sel_rows) |rows| gpa.free(rows);
@@ -413,10 +430,10 @@ pub fn main() !void {
             const swap_used_str = try mem_unit.formatMem(swap_used);
             const buff_cache_str = try mem_unit.formatMem(buff_cache);
 
-            const mem_info: []u8 = try fmt.allocPrint(gpa, "Memory: {s} Total, {s} Free, {s} Used, {s} Available", .{ total, free, used_str, available });
+            const mem_info: []u8 = try fmt.allocPrint(gpa, "Memory: {s} Total, {s} Free, {s} Used, {s} buff/cache", .{ total, free, used_str, buff_cache_str });
             defer gpa.free(mem_info);
 
-            const swap_info: []u8 = try fmt.allocPrint(gpa, "Swap Memory: {s} Total, {s} Free, {s} Used {s} buff/cache", .{ swap_total, swap_free, swap_used_str, buff_cache_str });
+            const swap_info: []u8 = try fmt.allocPrint(gpa, "Swap Memory: {s} Total, {s} Free, {s} Used {s} Available", .{ swap_total, swap_free, swap_used_str, available });
             defer gpa.free(swap_info);
 
             _ = win.printSegment(.{ .text = mem_info, .style = .{ .fg = .{ .index = 6 }, .bold = true } }, .{ .row_offset = row });
@@ -426,10 +443,12 @@ pub fn main() !void {
             row += 2;
 
             // Process listing
-            var processess = try Process.listProcess(gpa);
+            const uptime_sec = @as(u64, @intFromFloat(uptime.seconds));
+            var processess = try Process.listProcess(gpa, uptime_sec);
             defer {
-                for (processess.items(.name)) |*name| {
+                for (processess.items(.name), processess.items(.proc_time)) |*name, *proc_time| {
                     gpa.free(name.*);
+                    gpa.free(proc_time.*);
                 }
                 processess.deinit(gpa);
             }
