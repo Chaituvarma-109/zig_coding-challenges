@@ -1,101 +1,638 @@
 const std = @import("std");
-const c = @cImport(
-    @cInclude("x86_64-linux-gnu/sys/user.h"),
-);
+const c = @cImport({
+    @cInclude("x86_64-linux-gnu/sys/user.h");
+    @cInclude("x86_64-linux-gnu/sys/syscall.h");
+    @cInclude("x86_64-linux-gnu/sys/unistd.h");
+    @cInclude("errno.h");
+});
 const posix = std.posix;
-
-// const UserRegsStruct = extern struct {
-//     r15: u64,
-//     r14: u64,
-//     r13: u64,
-//     r12: u64,
-//     rbp: u64,
-//     rbx: u64,
-//     r11: u64,
-//     r10: u64,
-//     r9: u64,
-//     r8: u64,
-//     rax: u64,
-//     rcx: u64,
-//     rdx: u64,
-//     rsi: u64,
-//     rdi: u64,
-//     orig_rax: u64,
-//     rip: u64,
-//     cs: u64,
-//     eflags: u64,
-//     rsp: u64,
-//     ss: u64,
-//     fs_base: u64,
-//     gs_base: u64,
-//     ds: u64,
-//     es: u64,
-//     fs: u64,
-//     gs: u64,
-// };
+const linux = std.os.linux;
 
 pub fn main() !void {
     var alloc = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer _ = alloc.deinit();
+    defer alloc.deinit();
     const gpa = alloc.allocator();
 
     const args = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, args);
 
     std.debug.assert(args.len >= 2);
     const external_process = args[1..];
 
     const pid = try posix.fork();
-    if (pid < 0) {
-        std.debug.print("strace error pid: {}\n", .{pid});
-        return;
-    }
 
     switch (pid) {
+        -1 => {
+            std.debug.print("strace error pid: {}\n", .{pid});
+            return;
+        },
         0 => {
-            _ = std.os.linux.ptrace(std.os.linux.PTRACE.TRACEME, 0, 0, 0, 0);
-            _ = std.os.linux.kill(std.os.linux.getpid(), std.os.linux.SIG.STOP);
-            return std.process.execv(gpa, external_process);
-
-            // const args_buf = try gpa.allocSentinel(?[*:0]const u8, args.len, null);
-            // defer gpa.free(args_buf);
-            // for (args, 0..) |arg, i| {
-            //     args_buf[i] = (try gpa.dupeZ(u8, arg)).ptr;
-            //     gpa.free(arg);
-            // }
-            // const envp = @as([*:null]const ?[*:0]const u8, @ptrCast(std.os.environ.ptr));
-            // _ = std.os.linux.execve(args_buf.ptr[0].?, args_buf.ptr, envp);
-            // std.os.linux.exit(1);
+            _ = linux.ptrace(linux.PTRACE.TRACEME, pid, 0, 0, 0);
+            _ = linux.kill(linux.getpid(), linux.SIG.STOP);
+            const err = std.process.execv(gpa, external_process);
+            std.debug.print("err: {}\n", .{err});
+            return;
         },
         else => {
             var status: u32 = 0;
-            _ = std.os.linux.waitpid(pid, &status, 0);
-            _ = std.os.linux.ptrace(std.os.linux.PTRACE.SETOPTIONS, pid, 0, @intCast(std.os.linux.PTRACE.KILL), 0);
+            _ = linux.waitpid(pid, &status, 0);
+            _ = linux.ptrace(linux.PTRACE.SETOPTIONS, pid, 0, linux.PTRACE.O.TRACESYSGOOD, 0);
 
-            // var in_syscall = false;
+            var curr_syscall: i64 = 0;
+            var in_syscall = false;
 
             while (true) {
-                _ = std.os.linux.ptrace(std.os.linux.PTRACE.SYSCALL, pid, 0, 0, 0);
-                _ = std.os.linux.waitpid(pid, &status, 0);
-                if (std.os.linux.W.IFEXITED(status) or std.os.linux.W.IFSIGNALED(status)) break;
+                _ = linux.ptrace(linux.PTRACE.SYSCALL, pid, 0, 0, 0);
+                _ = linux.waitpid(pid, &status, 0);
+                if (linux.W.IFEXITED(status)) {
+                    const exit_code = linux.W.EXITSTATUS(status);
+                    std.debug.print("++ exited with {d} ++\n", .{exit_code});
+                    break;
+                }
 
-                var regs: c.user_regs_struct = undefined;
-                // var regs: UserRegsStruct = undefined;
-                _ = std.os.linux.ptrace(std.os.linux.PTRACE.GETREGS, pid, 0, @intFromPtr(&regs), 0);
+                if (linux.W.IFSIGNALED(status)) break;
 
-                const syscall = regs.orig_rax;
-                // if (!in_syscall) {
-                std.debug.print("[{d}] ({d}, {d}, {d}, {d}, {d}, {d})\n", .{ syscall, regs.rdi, regs.rsi, regs.rdx, regs.r10, regs.r8, regs.r9 });
+                if (linux.W.IFSTOPPED(status)) {
+                    const sig = linux.W.STOPSIG(status);
 
-                _ = std.os.linux.ptrace(std.os.linux.PTRACE.SYSCALL, pid, 0, 0, 0);
-                _ = std.os.linux.waitpid(pid, &status, 0);
+                    if (sig != 5 and sig != 133) {
+                        _ = linux.ptrace(linux.PTRACE.SYSCALL, pid, 0, @intCast(sig), 0);
+                        continue;
+                    }
 
-                _ = std.os.linux.ptrace(std.os.linux.PTRACE.GETREGS, pid, 0, @intFromPtr(&regs), 0);
+                    var regs: c.user_regs_struct = undefined;
+                    if (linux.ptrace(linux.PTRACE.GETREGS, pid, 0, @intFromPtr(&regs), 0) == -1) continue;
 
-                std.debug.print("={}\n", .{regs.rax});
-                // }
-                // in_syscall = !in_syscall;
+                    if (!in_syscall) {
+                        curr_syscall = @intCast(regs.orig_rax);
+                        const sysname_name = getSysCallName(curr_syscall);
+                        std.debug.print("[{s}] (", .{sysname_name});
+                        try printSysArgs(regs);
+
+                        in_syscall = true;
+                    } else {
+                        const ret_val: i64 = @bitCast(regs.rax);
+                        const err_name = getErrorName(ret_val);
+                        const err_desc = getErrorDescription(ret_val);
+
+                        if (ret_val < 0 and ret_val > -4096) {
+                            if (err_name.len > 0) {
+                                if (err_desc.len > 0) {
+                                    std.debug.print(") = {d} {s} ({s})\n", .{ ret_val, err_name, err_desc });
+                                } else {
+                                    std.debug.print(") = {d} {s}\n", .{ ret_val, err_name });
+                                }
+                            } else {
+                                std.debug.print(") = {d}\n", .{ret_val});
+                            }
+                        } else {
+                            if (curr_syscall == @intFromEnum(linux.SYS.mmap) or curr_syscall == @intFromEnum(linux.SYS.brk)) {
+                                std.debug.print(") = 0x{x}\n", .{@as(u64, @bitCast(ret_val))});
+                            } else {
+                                std.debug.print(") = {d}\n", .{ret_val});
+                            }
+                        }
+                        in_syscall = false;
+                    }
+                }
             }
         },
     }
+}
+
+fn printSysArgs(rargs: c.user_regs_struct) !void {
+    std.debug.print("{d} {d} {d} {d} {d} {d}", .{ rargs.rdi, rargs.rsi, rargs.rdx, rargs.r10, rargs.r8, rargs.r9 });
+}
+
+fn getSysCallName(num: i64) []const u8 {
+    return switch (num) {
+        c.SYS_read => "read",
+        c.SYS_write => "write",
+        c.SYS_open => "open",
+        c.SYS_close => "close",
+        c.SYS_stat => "stat",
+        c.SYS_fstat => "fstat",
+        c.SYS_lstat => "lstat",
+        c.SYS_poll => "poll",
+        c.SYS_lseek => "lseek",
+        c.SYS_mmap => "mmap",
+        c.SYS_mprotect => "mprotect",
+        c.SYS_munmap => "munmap",
+        c.SYS_brk => "brk",
+        c.SYS_rt_sigaction => "rt_sigaction",
+        c.SYS_rt_sigprocmask => "rt_sigprocmask",
+        c.SYS_rt_sigreturn => "rt_sigreturn",
+        c.SYS_ioctl => "ioctl",
+        c.SYS_pread64 => "pread64",
+        c.SYS_pwrite64 => "pwrite64",
+        c.SYS_readv => "readv",
+        c.SYS_writev => "writev",
+        c.SYS_access => "access",
+        c.SYS_pipe => "pipe",
+        c.SYS_select => "select",
+        c.SYS_sched_yield => "sched_yield",
+        c.SYS_mremap => "mremap",
+        c.SYS_msync => "msync",
+        c.SYS_mincore => "mincore",
+        c.SYS_madvise => "madvise",
+        c.SYS_shmget => "shmget",
+        c.SYS_shmat => "shmat",
+        c.SYS_shmctl => "shmctl",
+        c.SYS_dup => "dup",
+        c.SYS_dup2 => "dup2",
+        c.SYS_pause => "pause",
+        c.SYS_nanosleep => "nanosleep",
+        c.SYS_getitimer => "getitimer",
+        c.SYS_alarm => "alarm",
+        c.SYS_setitimer => "setitimer",
+        c.SYS_getpid => "getpid",
+        c.SYS_sendfile => "sendfile",
+        c.SYS_socket => "socket",
+        c.SYS_connect => "connect",
+        c.SYS_accept => "accept",
+        c.SYS_sendto => "sendto",
+        c.SYS_recvfrom => "recvfrom",
+        c.SYS_sendmsg => "sendmsg",
+        c.SYS_recvmsg => "recvmsg",
+        c.SYS_shutdown => "shutdown",
+        c.SYS_bind => "bind",
+        c.SYS_listen => "listen",
+        c.SYS_getsockname => "getsockname",
+        c.SYS_getpeername => "getpeername",
+        c.SYS_socketpair => "socketpair",
+        c.SYS_setsockopt => "setsockopt",
+        c.SYS_getsockopt => "getsockopt",
+        c.SYS_clone => "clone",
+        c.SYS_fork => "fork",
+        c.SYS_vfork => "vfork",
+        c.SYS_execve => "execve",
+        c.SYS_exit => "exit",
+        c.SYS_wait4 => "wait4",
+        c.SYS_kill => "kill",
+        c.SYS_uname => "uname",
+        c.SYS_semget => "semget",
+        c.SYS_semop => "semop",
+        c.SYS_semctl => "semctl",
+        c.SYS_shmdt => "shmdt",
+        c.SYS_msgget => "msgget",
+        c.SYS_msgsnd => "msgsnd",
+        c.SYS_msgrcv => "msgrcv",
+        c.SYS_msgctl => "msgctl",
+        c.SYS_fcntl => "fcntl",
+        c.SYS_flock => "flock",
+        c.SYS_fsync => "fsync",
+        c.SYS_fdatasync => "fdatasync",
+        c.SYS_truncate => "truncate",
+        c.SYS_ftruncate => "ftruncate",
+        c.SYS_getdents => "getdents",
+        c.SYS_getcwd => "getcwd",
+        c.SYS_chdir => "chdir",
+        c.SYS_fchdir => "fchdir",
+        c.SYS_rename => "rename",
+        c.SYS_mkdir => "mkdir",
+        c.SYS_rmdir => "rmdir",
+        c.SYS_creat => "creat",
+        c.SYS_link => "link",
+        c.SYS_unlink => "unlink",
+        c.SYS_symlink => "symlink",
+        c.SYS_readlink => "readlink",
+        c.SYS_chmod => "chmod",
+        c.SYS_fchmod => "fchmod",
+        c.SYS_chown => "chown",
+        c.SYS_fchown => "fchown",
+        c.SYS_lchown => "lchown",
+        c.SYS_umask => "umask",
+        c.SYS_gettimeofday => "gettimeofday",
+        c.SYS_getrlimit => "getrlimit",
+        c.SYS_getrusage => "getrusage",
+        c.SYS_sysinfo => "sysinfo",
+        c.SYS_times => "times",
+        c.SYS_ptrace => "ptrace",
+        c.SYS_getuid => "getuid",
+        c.SYS_syslog => "syslog",
+        c.SYS_getgid => "getgid",
+        c.SYS_setuid => "setuid",
+        c.SYS_setgid => "setgid",
+        c.SYS_geteuid => "geteuid",
+        c.SYS_getegid => "getegid",
+        c.SYS_setpgid => "setpgid",
+        c.SYS_getppid => "getppid",
+        c.SYS_getpgrp => "getpgrp",
+        c.SYS_setsid => "setsid",
+        c.SYS_setreuid => "setreuid",
+        c.SYS_setregid => "setregid",
+        c.SYS_getgroups => "getgroups",
+        c.SYS_setgroups => "setgroups",
+        c.SYS_setresuid => "setresuid",
+        c.SYS_getresuid => "getresuid",
+        c.SYS_setresgid => "setresgid",
+        c.SYS_getresgid => "getresgid",
+        c.SYS_getpgid => "getpgid",
+        c.SYS_setfsuid => "setfsuid",
+        c.SYS_setfsgid => "setfsgid",
+        c.SYS_getsid => "getsid",
+        c.SYS_capget => "capget",
+        c.SYS_capset => "capset",
+        c.SYS_rt_sigpending => "rt_sigpending",
+        c.SYS_rt_sigtimedwait => "rt_sigtimedwait",
+        c.SYS_rt_sigqueueinfo => "rt_sigqueueinfo",
+        c.SYS_rt_sigsuspend => "rt_sigsuspend",
+        c.SYS_sigaltstack => "sigaltstack",
+        c.SYS_utime => "utime",
+        c.SYS_mknod => "mknod",
+        c.SYS_uselib => "uselib",
+        c.SYS_personality => "personality",
+        c.SYS_ustat => "ustat",
+        c.SYS_statfs => "statfs",
+        c.SYS_fstatfs => "fstatfs",
+        c.SYS_sysfs => "sysfs",
+        c.SYS_getpriority => "getpriority",
+        c.SYS_setpriority => "setpriority",
+        c.SYS_sched_setparam => "sched_setparam",
+        c.SYS_sched_getparam => "sched_getparam",
+        c.SYS_sched_setscheduler => "sched_setscheduler",
+        c.SYS_sched_getscheduler => "sched_getscheduler",
+        c.SYS_sched_get_priority_max => "sched_get_priority_max",
+        c.SYS_sched_get_priority_min => "sched_get_priority_min",
+        c.SYS_sched_rr_get_interval => "sched_rr_get_interval",
+        c.SYS_mlock => "mlock",
+        c.SYS_munlock => "munlock",
+        c.SYS_mlockall => "mlockall",
+        c.SYS_munlockall => "munlockall",
+        c.SYS_vhangup => "vhangup",
+        c.SYS_modify_ldt => "modify_ldt",
+        c.SYS_pivot_root => "pivot_root",
+        c.SYS__sysctl => "_sysctl",
+        c.SYS_prctl => "prctl",
+        c.SYS_arch_prctl => "arch_prctl",
+        c.SYS_adjtimex => "adjtimex",
+        c.SYS_setrlimit => "setrlimit",
+        c.SYS_chroot => "chroot",
+        c.SYS_sync => "sync",
+        c.SYS_acct => "acct",
+        c.SYS_settimeofday => "settimeofday",
+        c.SYS_mount => "mount",
+        c.SYS_umount2 => "umount2",
+        c.SYS_swapon => "swapon",
+        c.SYS_swapoff => "swapoff",
+        c.SYS_reboot => "reboot",
+        c.SYS_sethostname => "sethostname",
+        c.SYS_setdomainname => "setdomainname",
+        c.SYS_iopl => "iopl",
+        c.SYS_ioperm => "ioperm",
+        c.SYS_create_module => "create_module",
+        c.SYS_init_module => "init_module",
+        c.SYS_delete_module => "delete_module",
+        c.SYS_get_kernel_syms => "get_kernel_syms",
+        c.SYS_query_module => "query_module",
+        c.SYS_quotactl => "quotactl",
+        c.SYS_nfsservctl => "nfsservctl",
+        c.SYS_getpmsg => "getpmsg",
+        c.SYS_putpmsg => "putpmsg",
+        c.SYS_afs_syscall => "afs_syscall",
+        c.SYS_tuxcall => "tuxcall",
+        c.SYS_security => "security",
+        c.SYS_gettid => "gettid",
+        c.SYS_readahead => "readahead",
+        c.SYS_setxattr => "setxattr",
+        c.SYS_lsetxattr => "lsetxattr",
+        c.SYS_fsetxattr => "fsetxattr",
+        c.SYS_getxattr => "getxattr",
+        c.SYS_lgetxattr => "lgetxattr",
+        c.SYS_fgetxattr => "fgetxattr",
+        c.SYS_listxattr => "listxattr",
+        c.SYS_llistxattr => "llistxattr",
+        c.SYS_flistxattr => "flistxattr",
+        c.SYS_removexattr => "removexattr",
+        c.SYS_lremovexattr => "lremovexattr",
+        c.SYS_fremovexattr => "fremovexattr",
+        c.SYS_tkill => "tkill",
+        c.SYS_time => "time",
+        c.SYS_futex => "futex",
+        c.SYS_sched_setaffinity => "sched_setaffinity",
+        c.SYS_sched_getaffinity => "sched_getaffinity",
+        c.SYS_set_thread_area => "set_thread_area",
+        c.SYS_io_setup => "io_setup",
+        c.SYS_io_destroy => "io_destroy",
+        c.SYS_io_getevents => "io_getevents",
+        c.SYS_io_submit => "io_submit",
+        c.SYS_io_cancel => "io_cancel",
+        c.SYS_get_thread_area => "get_thread_area",
+        c.SYS_lookup_dcookie => "lookup_dcookie",
+        c.SYS_epoll_create => "epoll_create",
+        c.SYS_epoll_ctl_old => "epoll_ctl_old",
+        c.SYS_epoll_wait_old => "epoll_wait_old",
+        c.SYS_remap_file_pages => "remap_file_pages",
+        c.SYS_getdents64 => "getdents64",
+        c.SYS_set_tid_address => "set_tid_address",
+        c.SYS_restart_syscall => "restart_syscall",
+        c.SYS_semtimedop => "semtimedop",
+        c.SYS_fadvise64 => "fadvise64",
+        c.SYS_timer_create => "timer_create",
+        c.SYS_timer_settime => "timer_settime",
+        c.SYS_timer_gettime => "timer_gettime",
+        c.SYS_timer_getoverrun => "timer_getoverrun",
+        c.SYS_timer_delete => "timer_delete",
+        c.SYS_clock_settime => "clock_settime",
+        c.SYS_clock_gettime => "clock_gettime",
+        c.SYS_clock_getres => "clock_getres",
+        c.SYS_clock_nanosleep => "clock_nanosleep",
+        c.SYS_exit_group => "exit_group",
+        c.SYS_epoll_wait => "epoll_wait",
+        c.SYS_epoll_ctl => "epoll_ctl",
+        c.SYS_tgkill => "tgkill",
+        c.SYS_utimes => "utimes",
+        c.SYS_vserver => "vserver",
+        c.SYS_mbind => "mbind",
+        c.SYS_set_mempolicy => "set_mempolicy",
+        c.SYS_get_mempolicy => "get_mempolicy",
+        c.SYS_mq_open => "mq_open",
+        c.SYS_mq_unlink => "mq_unlink",
+        c.SYS_mq_timedsend => "mq_timedsend",
+        c.SYS_mq_timedreceive => "mq_timedreceive",
+        c.SYS_mq_notify => "mq_notify",
+        c.SYS_mq_getsetattr => "mq_getsetattr",
+        c.SYS_kexec_load => "kexec_load",
+        c.SYS_waitid => "waitid",
+        c.SYS_add_key => "add_key",
+        c.SYS_request_key => "request_key",
+        c.SYS_keyctl => "keyctl",
+        c.SYS_ioprio_set => "ioprio_set",
+        c.SYS_ioprio_get => "ioprio_get",
+        c.SYS_inotify_init => "inotify_init",
+        c.SYS_inotify_add_watch => "inotify_add_watch",
+        c.SYS_inotify_rm_watch => "inotify_rm_watch",
+        c.SYS_migrate_pages => "migrate_pages",
+        c.SYS_openat => "openat",
+        c.SYS_mkdirat => "mkdirat",
+        c.SYS_mknodat => "mknodat",
+        c.SYS_fchownat => "fchownat",
+        c.SYS_futimesat => "futimesat",
+        c.SYS_newfstatat => "newfstatat",
+        c.SYS_unlinkat => "unlinkat",
+        c.SYS_renameat => "renameat",
+        c.SYS_linkat => "linkat",
+        c.SYS_symlinkat => "symlinkat",
+        c.SYS_readlinkat => "readlinkat",
+        c.SYS_fchmodat => "fchmodat",
+        c.SYS_faccessat => "faccessat",
+        c.SYS_pselect6 => "pselect6",
+        c.SYS_ppoll => "ppoll",
+        c.SYS_unshare => "unshare",
+        c.SYS_set_robust_list => "set_robust_list",
+        c.SYS_get_robust_list => "get_robust_list",
+        c.SYS_splice => "splice",
+        c.SYS_tee => "tee",
+        c.SYS_sync_file_range => "sync_file_range",
+        c.SYS_vmsplice => "vmsplice",
+        c.SYS_move_pages => "move_pages",
+        c.SYS_utimensat => "utimensat",
+        c.SYS_epoll_pwait => "epoll_pwait",
+        c.SYS_signalfd => "signalfd",
+        c.SYS_timerfd_create => "timerfd_create",
+        c.SYS_eventfd => "eventfd",
+        c.SYS_fallocate => "fallocate",
+        c.SYS_timerfd_settime => "timerfd_settime",
+        c.SYS_timerfd_gettime => "timerfd_gettime",
+        c.SYS_accept4 => "accept4",
+        c.SYS_signalfd4 => "signalfd4",
+        c.SYS_eventfd2 => "eventfd2",
+        c.SYS_epoll_create1 => "epoll_create1",
+        c.SYS_dup3 => "dup3",
+        c.SYS_pipe2 => "pipe2",
+        c.SYS_inotify_init1 => "inotify_init1",
+        c.SYS_preadv => "preadv",
+        c.SYS_pwritev => "pwritev",
+        c.SYS_rt_tgsigqueueinfo => "rt_tgsigqueueinfo",
+        c.SYS_perf_event_open => "perf_event_open",
+        c.SYS_recvmmsg => "recvmmsg",
+        c.SYS_fanotify_init => "fanotify_init",
+        c.SYS_fanotify_mark => "fanotify_mark",
+        c.SYS_prlimit64 => "prlimit64",
+        c.SYS_name_to_handle_at => "name_to_handle_at",
+        c.SYS_open_by_handle_at => "open_by_handle_at",
+        c.SYS_clock_adjtime => "clock_adjtime",
+        c.SYS_syncfs => "syncfs",
+        c.SYS_sendmmsg => "sendmmsg",
+        c.SYS_setns => "setns",
+        c.SYS_getcpu => "getcpu",
+        c.SYS_process_vm_readv => "process_vm_readv",
+        c.SYS_process_vm_writev => "process_vm_writev",
+        c.SYS_kcmp => "kcmp",
+        c.SYS_finit_module => "finit_module",
+        c.SYS_sched_setattr => "sched_setattr",
+        c.SYS_sched_getattr => "sched_getattr",
+        c.SYS_renameat2 => "renameat2",
+        c.SYS_seccomp => "seccomp",
+        c.SYS_getrandom => "getrandom",
+        c.SYS_memfd_create => "memfd_create",
+        c.SYS_kexec_file_load => "kexec_file_load",
+        c.SYS_bpf => "bpf",
+        c.SYS_execveat => "execveat",
+        c.SYS_userfaultfd => "userfaultfd",
+        c.SYS_membarrier => "membarrier",
+        c.SYS_mlock2 => "mlock2",
+        c.SYS_copy_file_range => "copy_file_range",
+        c.SYS_preadv2 => "preadv2",
+        c.SYS_pwritev2 => "pwritev2",
+        c.SYS_pkey_mprotect => "pkey_mprotect",
+        c.SYS_pkey_alloc => "pkey_alloc",
+        c.SYS_pkey_free => "pkey_free",
+        c.SYS_statx => "statx",
+        c.SYS_io_pgetevents => "io_pgetevents",
+        c.SYS_rseq => "rseq",
+        c.SYS_uretprobe => "uretprobe",
+        c.SYS_pidfd_send_signal => "pidfd_send_signal",
+        c.SYS_io_uring_setup => "io_uring_setup",
+        c.SYS_io_uring_enter => "io_uring_enter",
+        c.SYS_io_uring_register => "io_uring_register",
+        c.SYS_open_tree => "open_tree",
+        c.SYS_move_mount => "move_mount",
+        c.SYS_fsopen => "fsopen",
+        c.SYS_fsconfig => "fsconfig",
+        c.SYS_fsmount => "fsmount",
+        c.SYS_fspick => "fspick",
+        c.SYS_pidfd_open => "pidfd_open",
+        c.SYS_clone3 => "clone3",
+        c.SYS_close_range => "close_range",
+        c.SYS_openat2 => "openat2",
+        c.SYS_pidfd_getfd => "pidfd_getfd",
+        c.SYS_faccessat2 => "faccessat2",
+        c.SYS_process_madvise => "process_madvise",
+        c.SYS_epoll_pwait2 => "epoll_pwait2",
+        c.SYS_mount_setattr => "mount_setattr",
+        c.SYS_quotactl_fd => "quotactl_fd",
+        c.SYS_landlock_create_ruleset => "landlock_create_ruleset",
+        c.SYS_landlock_add_rule => "landlock_add_rule",
+        c.SYS_landlock_restrict_self => "landlock_restrict_self",
+        c.SYS_memfd_secret => "memfd_secret",
+        c.SYS_process_mrelease => "process_mrelease",
+        c.SYS_futex_waitv => "futex_waitv",
+        c.SYS_set_mempolicy_home_node => "set_mempolicy_home_node",
+        c.SYS_cachestat => "cachestat",
+        c.SYS_fchmodat2 => "fchmodat2",
+        c.SYS_map_shadow_stack => "map_shadow_stack",
+        c.SYS_futex_wake => "futex_wake",
+        c.SYS_futex_wait => "futex_wait",
+        c.SYS_futex_requeue => "futex_requeue",
+        c.SYS_statmount => "statmount",
+        c.SYS_listmount => "listmount",
+        c.SYS_lsm_get_self_attr => "lsm_get_self_attr",
+        c.SYS_lsm_set_self_attr => "lsm_set_self_attr",
+        c.SYS_lsm_list_modules => "lsm_list_modules",
+        c.SYS_mseal => "mseal",
+        else => "unknown",
+    };
+}
+
+fn getErrorName(errnum: i64) []const u8 {
+    const err_num = -errnum;
+    return switch (err_num) {
+        c.EPERM => "EPERM",
+        c.ENOENT => "ENOENT",
+        c.ESRCH => "ESRCH",
+        c.EINTR => "EINTR",
+        c.EIO => "EIO",
+        c.ENXIO => "ENXIO",
+        c.E2BIG => "E2BIG",
+        c.ENOEXEC => "ENOEXEC",
+        c.EBADF => "EBADF",
+        c.ECHILD => "ECHILD",
+        c.EAGAIN => "EAGAIN",
+        c.ENOMEM => "ENOMEM",
+        c.EACCES => "EACCES",
+        c.EFAULT => "EFAULT",
+        c.ENOTBLK => "ENOTBLK",
+        c.EBUSY => "EBUSY",
+        c.EEXIST => "EEXIST",
+        c.EXDEV => "EXDEV",
+        c.ENODEV => "ENODEV",
+        c.ENOTDIR => "ENOTDIR",
+        c.EISDIR => "EISDIR",
+        c.EINVAL => "EINVAL",
+        c.ENFILE => "ENFILE",
+        c.EMFILE => "EMFILE",
+        c.ENOTTY => "ENOTTY",
+        c.ETXTBSY => "ETXTBSY",
+        c.EFBIG => "EFBIG",
+        c.ENOSPC => "ENOSPC",
+        c.ESPIPE => "ESPIPE",
+        c.EROFS => "EROFS",
+        c.EMLINK => "EMLINK",
+        c.EPIPE => "EPIPE",
+        c.EDOM => "EDOM",
+        c.ERANGE => "ERANGE",
+        c.EDEADLK => "EDEADLK",
+        c.ENAMETOOLONG => "ENAMETOOLONG",
+        c.ENOLCK => "ENOLCK",
+        c.ENOSYS => "ENOSYS",
+        c.ENOTEMPTY => "ENOTEMPTY",
+        c.ELOOP => "ELOOP",
+        // c.EWOULDBLOCK => "EWOULDBLOCK",
+        c.ENOMSG => "ENOMSG",
+        c.EIDRM => "EIDRM",
+        c.ECHRNG => "ECHRNG",
+        c.EL2NSYNC => "EL2NSYNC",
+        c.EL3HLT => "EL3HLT",
+        c.EL3RST => "EL3RST",
+        c.ELNRNG => "ELNRNG",
+        c.EUNATCH => "EUNATCH",
+        c.ENOCSI => "ENOCSI",
+        c.EL2HLT => "EL2HLT",
+        c.EBADE => "EBADE",
+        c.EBADR => "EBADR",
+        c.EXFULL => "EXFULL",
+        c.ENOANO => "ENOANO",
+        c.EBADRQC => "EBADRQC",
+        c.EBADSLT => "EBADSLT",
+        // c.EDEADLOCK => "EDEADLOCK",
+        c.EBFONT => "EBFONT",
+        c.ENOSTR => "ENOSTR",
+        c.ENODATA => "ENODATA",
+        c.ETIME => "ETIME",
+        c.ENOSR => "ENOSR",
+        c.ENONET => "ENONET",
+        c.ENOPKG => "ENOPKG",
+        c.EREMOTE => "EREMOTE",
+        c.ENOLINK => "ENOLINK",
+        c.EADV => "EADV",
+        c.ESRMNT => "ESRMNT",
+        c.ECOMM => "ECOMM",
+        c.EPROTO => "EPROTO",
+        c.EMULTIHOP => "EMULTIHOP",
+        c.EDOTDOT => "EDOTDOT",
+        c.EBADMSG => "EBADMSG",
+        c.EOVERFLOW => "EOVERFLOW",
+        c.ENOTUNIQ => "ENOTUNIQ",
+        c.EBADFD => "EBADFD",
+        c.EREMCHG => "EREMCHG",
+        c.ELIBACC => "ELIBACC",
+        c.ELIBBAD => "ELIBBAD",
+        c.ELIBSCN => "ELIBSCN",
+        c.ELIBMAX => "ELIBMAX",
+        c.ELIBEXEC => "ELIBEXEC",
+        c.EILSEQ => "EILSEQ",
+        c.ERESTART => "ERESTART",
+        c.ESTRPIPE => "ESTRPIPE",
+        c.EUSERS => "EUSERS",
+        c.ENOTSOCK => "ENOTSOCK",
+        c.EDESTADDRREQ => "EDESTADDRREQ",
+        c.EMSGSIZE => "EMSGSIZE",
+        c.EPROTOTYPE => "EPROTOTYPE",
+        c.ENOPROTOOPT => "ENOPROTOOPT",
+        c.EPROTONOSUPPORT => "EPROTONOSUPPORT",
+        c.ESOCKTNOSUPPORT => "ESOCKTNOSUPPORT",
+        c.EOPNOTSUPP => "EOPNOTSUPP",
+        c.EPFNOSUPPORT => "EPFNOSUPPORT",
+        c.EAFNOSUPPORT => "EAFNOSUPPORT",
+        c.EADDRINUSE => "EADDRINUSE",
+        c.EADDRNOTAVAIL => "EADDRNOTAVAIL",
+        c.ENETDOWN => "ENETDOWN",
+        c.ENETUNREACH => "ENETUNREACH",
+        c.ENETRESET => "ENETRESET",
+        c.ECONNABORTED => "ECONNABORTED",
+        c.ECONNRESET => "ECONNRESET",
+        c.ENOBUFS => "ENOBUFS",
+        c.EISCONN => "EISCONN",
+        c.ENOTCONN => "ENOTCONN",
+        c.ESHUTDOWN => "ESHUTDOWN",
+        c.ETOOMANYREFS => "ETOOMANYREFS",
+        c.ETIMEDOUT => "ETIMEDOUT",
+        c.ECONNREFUSED => "ECONNREFUSED",
+        c.EHOSTDOWN => "EHOSTDOWN",
+        c.EHOSTUNREACH => "EHOSTUNREACH",
+        c.EALREADY => "EALREADY",
+        c.EINPROGRESS => "EINPROGRESS",
+        c.ESTALE => "ESTALE",
+        c.EUCLEAN => "EUCLEAN",
+        c.ENOTNAM => "ENOTNAM",
+        c.ENAVAIL => "ENAVAIL",
+        c.EISNAM => "EISNAM",
+        c.EREMOTEIO => "EREMOTEIO",
+        c.EDQUOT => "EDQUOT",
+        c.ENOMEDIUM => "ENOMEDIUM",
+        c.EMEDIUMTYPE => "EMEDIUMTYPE",
+        c.ECANCELED => "ECANCELED",
+        c.ENOKEY => "ENOKEY",
+        c.EKEYEXPIRED => "EKEYEXPIRED",
+        c.EKEYREVOKED => "EKEYREVOKED",
+        c.EKEYREJECTED => "EKEYREJECTED",
+        c.EOWNERDEAD => "EOWNERDEAD",
+        c.ENOTRECOVERABLE => "ENOTRECOVERABLE",
+        c.ERFKILL => "ERFKILL",
+        c.EHWPOISON => "EHWPOISON",
+        // ENOTSUP = EOPNOTSUPP
+        else => "",
+    };
+}
+
+fn getErrorDescription(errnum: i64) []const u8 {
+    const err_num = -errnum;
+    return switch (err_num) {
+        c.ENOENT => "No Such File or Directory",
+        c.EACCES => "Permission Denied",
+        c.EINVAL => "Invalid Argument",
+        c.ENOMEM => "Cannot Allocate Memory",
+        c.EFAULT => "Bad Address",
+        else => "",
+    };
 }
