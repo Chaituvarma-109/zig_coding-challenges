@@ -2,6 +2,8 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("x86_64-linux-gnu/sys/user.h");
 });
+const syscall = @import("syscallmappings.zig");
+
 const posix = std.posix;
 const linux = std.os.linux;
 
@@ -37,6 +39,8 @@ pub fn main() !void {
             var curr_syscall: i64 = 0;
             var ret_val: i64 = undefined;
             var in_syscall = false;
+            var syscall_args: [6]u64 = undefined;
+            var entry_regs: c.user_regs_struct = undefined;
 
             while (true) {
                 _ = linux.ptrace(linux.PTRACE.SYSCALL, pid, 0, 0, 0);
@@ -65,14 +69,17 @@ pub fn main() !void {
                     if (!in_syscall) {
                         curr_syscall = @intCast(regs.orig_rax);
                         ret_val = @bitCast(regs.rax);
-                        const sysname_name: []const u8 = getSysCallName(curr_syscall);
+                        syscall_args = getSysCallArgs(regs);
+                        entry_regs = regs;
+
+                        const sysname_name: []const u8 = syscall.getSysCallName(curr_syscall);
                         std.debug.print("[{s}] (", .{sysname_name});
-                        try printSysArgs(regs);
 
                         in_syscall = true;
                     } else {
-                        const err_name: []const u8 = getErrorName(ret_val);
-                        const err_desc: []const u8 = getErrorDescription(ret_val);
+                        try printSysArgs(gpa, pid, syscall_args, curr_syscall);
+                        const err_name: []const u8 = syscall.getErrorName(ret_val);
+                        const err_desc: []const u8 = syscall.getErrorDescription(ret_val);
 
                         if (ret_val < 0 and ret_val > -4096) {
                             if (err_name.len > 0) {
@@ -99,540 +106,345 @@ pub fn main() !void {
     }
 }
 
-fn printSysArgs(rargs: c.user_regs_struct) !void {
-    std.debug.print("{d} {d} {d} {d} {d} {d}", .{ rargs.rdi, rargs.rsi, rargs.rdx, rargs.r10, rargs.r8, rargs.r9 });
-}
-
-fn getSysCallName(num: i64) []const u8 {
-    return switch (num) {
-        @intFromEnum(linux.SYS.read) => "read",
-        @intFromEnum(linux.SYS.write) => "write",
-        @intFromEnum(linux.SYS.open) => "open",
-        @intFromEnum(linux.SYS.close) => "close",
-        @intFromEnum(linux.SYS.stat) => "stat",
-        @intFromEnum(linux.SYS.fstat) => "fstat",
-        @intFromEnum(linux.SYS.lstat) => "lstat",
-        @intFromEnum(linux.SYS.poll) => "poll",
-        @intFromEnum(linux.SYS.lseek) => "lseek",
-        @intFromEnum(linux.SYS.mmap) => "mmap",
-        @intFromEnum(linux.SYS.mprotect) => "mprotect",
-        @intFromEnum(linux.SYS.munmap) => "munmap",
-        @intFromEnum(linux.SYS.brk) => "brk",
-        @intFromEnum(linux.SYS.rt_sigaction) => "rt_sigaction",
-        @intFromEnum(linux.SYS.rt_sigprocmask) => "rt_sigprocmask",
-        @intFromEnum(linux.SYS.rt_sigreturn) => "rt_sigreturn",
-        @intFromEnum(linux.SYS.ioctl) => "ioctl",
-        @intFromEnum(linux.SYS.pread64) => "pread64",
-        @intFromEnum(linux.SYS.pwrite64) => "pwrite64",
-        @intFromEnum(linux.SYS.readv) => "readv",
-        @intFromEnum(linux.SYS.writev) => "writev",
-        @intFromEnum(linux.SYS.access) => "access",
-        @intFromEnum(linux.SYS.pipe) => "pipe",
-        @intFromEnum(linux.SYS.select) => "select",
-        @intFromEnum(linux.SYS.sched_yield) => "sched_yield",
-        @intFromEnum(linux.SYS.mremap) => "mremap",
-        @intFromEnum(linux.SYS.msync) => "msync",
-        @intFromEnum(linux.SYS.mincore) => "mincore",
-        @intFromEnum(linux.SYS.madvise) => "madvise",
-        @intFromEnum(linux.SYS.shmget) => "shmget",
-        @intFromEnum(linux.SYS.shmat) => "shmat",
-        @intFromEnum(linux.SYS.shmctl) => "shmctl",
-        @intFromEnum(linux.SYS.dup) => "dup",
-        @intFromEnum(linux.SYS.dup2) => "dup2",
-        @intFromEnum(linux.SYS.pause) => "pause",
-        @intFromEnum(linux.SYS.nanosleep) => "nanosleep",
-        @intFromEnum(linux.SYS.getitimer) => "getitimer",
-        @intFromEnum(linux.SYS.alarm) => "alarm",
-        @intFromEnum(linux.SYS.setitimer) => "setitimer",
-        @intFromEnum(linux.SYS.getpid) => "getpid",
-        @intFromEnum(linux.SYS.sendfile) => "sendfile",
-        @intFromEnum(linux.SYS.socket) => "socket",
-        @intFromEnum(linux.SYS.connect) => "connect",
-        @intFromEnum(linux.SYS.accept) => "accept",
-        @intFromEnum(linux.SYS.sendto) => "sendto",
-        @intFromEnum(linux.SYS.recvfrom) => "recvfrom",
-        @intFromEnum(linux.SYS.sendmsg) => "sendmsg",
-        @intFromEnum(linux.SYS.recvmsg) => "recvmsg",
-        @intFromEnum(linux.SYS.shutdown) => "shutdown",
-        @intFromEnum(linux.SYS.bind) => "bind",
-        @intFromEnum(linux.SYS.listen) => "listen",
-        @intFromEnum(linux.SYS.getsockname) => "getsockname",
-        @intFromEnum(linux.SYS.getpeername) => "getpeername",
-        @intFromEnum(linux.SYS.socketpair) => "socketpair",
-        @intFromEnum(linux.SYS.setsockopt) => "setsockopt",
-        @intFromEnum(linux.SYS.getsockopt) => "getsockopt",
-        @intFromEnum(linux.SYS.clone) => "clone",
-        @intFromEnum(linux.SYS.fork) => "fork",
-        @intFromEnum(linux.SYS.vfork) => "vfork",
-        @intFromEnum(linux.SYS.execve) => "execve",
-        @intFromEnum(linux.SYS.exit) => "exit",
-        @intFromEnum(linux.SYS.wait4) => "wait4",
-        @intFromEnum(linux.SYS.kill) => "kill",
-        @intFromEnum(linux.SYS.uname) => "uname",
-        @intFromEnum(linux.SYS.semget) => "semget",
-        @intFromEnum(linux.SYS.semop) => "semop",
-        @intFromEnum(linux.SYS.semctl) => "semctl",
-        @intFromEnum(linux.SYS.shmdt) => "shmdt",
-        @intFromEnum(linux.SYS.msgget) => "msgget",
-        @intFromEnum(linux.SYS.msgsnd) => "msgsnd",
-        @intFromEnum(linux.SYS.msgrcv) => "msgrcv",
-        @intFromEnum(linux.SYS.msgctl) => "msgctl",
-        @intFromEnum(linux.SYS.fcntl) => "fcntl",
-        @intFromEnum(linux.SYS.flock) => "flock",
-        @intFromEnum(linux.SYS.fsync) => "fsync",
-        @intFromEnum(linux.SYS.fdatasync) => "fdatasync",
-        @intFromEnum(linux.SYS.truncate) => "truncate",
-        @intFromEnum(linux.SYS.ftruncate) => "ftruncate",
-        @intFromEnum(linux.SYS.getdents) => "getdents",
-        @intFromEnum(linux.SYS.getcwd) => "getcwd",
-        @intFromEnum(linux.SYS.chdir) => "chdir",
-        @intFromEnum(linux.SYS.fchdir) => "fchdir",
-        @intFromEnum(linux.SYS.rename) => "rename",
-        @intFromEnum(linux.SYS.mkdir) => "mkdir",
-        @intFromEnum(linux.SYS.rmdir) => "rmdir",
-        @intFromEnum(linux.SYS.creat) => "creat",
-        @intFromEnum(linux.SYS.link) => "link",
-        @intFromEnum(linux.SYS.unlink) => "unlink",
-        @intFromEnum(linux.SYS.symlink) => "symlink",
-        @intFromEnum(linux.SYS.readlink) => "readlink",
-        @intFromEnum(linux.SYS.chmod) => "chmod",
-        @intFromEnum(linux.SYS.fchmod) => "fchmod",
-        @intFromEnum(linux.SYS.chown) => "chown",
-        @intFromEnum(linux.SYS.fchown) => "fchown",
-        @intFromEnum(linux.SYS.lchown) => "lchown",
-        @intFromEnum(linux.SYS.umask) => "umask",
-        @intFromEnum(linux.SYS.gettimeofday) => "gettimeofday",
-        @intFromEnum(linux.SYS.getrlimit) => "getrlimit",
-        @intFromEnum(linux.SYS.getrusage) => "getrusage",
-        @intFromEnum(linux.SYS.sysinfo) => "sysinfo",
-        @intFromEnum(linux.SYS.times) => "times",
-        @intFromEnum(linux.SYS.ptrace) => "ptrace",
-        @intFromEnum(linux.SYS.getuid) => "getuid",
-        @intFromEnum(linux.SYS.syslog) => "syslog",
-        @intFromEnum(linux.SYS.getgid) => "getgid",
-        @intFromEnum(linux.SYS.setuid) => "setuid",
-        @intFromEnum(linux.SYS.setgid) => "setgid",
-        @intFromEnum(linux.SYS.geteuid) => "geteuid",
-        @intFromEnum(linux.SYS.getegid) => "getegid",
-        @intFromEnum(linux.SYS.setpgid) => "setpgid",
-        @intFromEnum(linux.SYS.getppid) => "getppid",
-        @intFromEnum(linux.SYS.getpgrp) => "getpgrp",
-        @intFromEnum(linux.SYS.setsid) => "setsid",
-        @intFromEnum(linux.SYS.setreuid) => "setreuid",
-        @intFromEnum(linux.SYS.setregid) => "setregid",
-        @intFromEnum(linux.SYS.getgroups) => "getgroups",
-        @intFromEnum(linux.SYS.setgroups) => "setgroups",
-        @intFromEnum(linux.SYS.setresuid) => "setresuid",
-        @intFromEnum(linux.SYS.getresuid) => "getresuid",
-        @intFromEnum(linux.SYS.setresgid) => "setresgid",
-        @intFromEnum(linux.SYS.getresgid) => "getresgid",
-        @intFromEnum(linux.SYS.getpgid) => "getpgid",
-        @intFromEnum(linux.SYS.setfsuid) => "setfsuid",
-        @intFromEnum(linux.SYS.setfsgid) => "setfsgid",
-        @intFromEnum(linux.SYS.getsid) => "getsid",
-        @intFromEnum(linux.SYS.capget) => "capget",
-        @intFromEnum(linux.SYS.capset) => "capset",
-        @intFromEnum(linux.SYS.rt_sigpending) => "rt_sigpending",
-        @intFromEnum(linux.SYS.rt_sigtimedwait) => "rt_sigtimedwait",
-        @intFromEnum(linux.SYS.rt_sigqueueinfo) => "rt_sigqueueinfo",
-        @intFromEnum(linux.SYS.rt_sigsuspend) => "rt_sigsuspend",
-        @intFromEnum(linux.SYS.sigaltstack) => "sigaltstack",
-        @intFromEnum(linux.SYS.utime) => "utime",
-        @intFromEnum(linux.SYS.mknod) => "mknod",
-        @intFromEnum(linux.SYS.uselib) => "uselib",
-        @intFromEnum(linux.SYS.personality) => "personality",
-        @intFromEnum(linux.SYS.ustat) => "ustat",
-        @intFromEnum(linux.SYS.statfs) => "statfs",
-        @intFromEnum(linux.SYS.fstatfs) => "fstatfs",
-        @intFromEnum(linux.SYS.sysfs) => "sysfs",
-        @intFromEnum(linux.SYS.getpriority) => "getpriority",
-        @intFromEnum(linux.SYS.setpriority) => "setpriority",
-        @intFromEnum(linux.SYS.sched_setparam) => "sched_setparam",
-        @intFromEnum(linux.SYS.sched_getparam) => "sched_getparam",
-        @intFromEnum(linux.SYS.sched_setscheduler) => "sched_setscheduler",
-        @intFromEnum(linux.SYS.sched_getscheduler) => "sched_getscheduler",
-        @intFromEnum(linux.SYS.sched_get_priority_max) => "sched_get_priority_max",
-        @intFromEnum(linux.SYS.sched_get_priority_min) => "sched_get_priority_min",
-        @intFromEnum(linux.SYS.sched_rr_get_interval) => "sched_rr_get_interval",
-        @intFromEnum(linux.SYS.mlock) => "mlock",
-        @intFromEnum(linux.SYS.munlock) => "munlock",
-        @intFromEnum(linux.SYS.mlockall) => "mlockall",
-        @intFromEnum(linux.SYS.munlockall) => "munlockall",
-        @intFromEnum(linux.SYS.vhangup) => "vhangup",
-        @intFromEnum(linux.SYS.modify_ldt) => "modify_ldt",
-        @intFromEnum(linux.SYS.pivot_root) => "pivot_root",
-        @intFromEnum(linux.SYS.sysctl) => "_sysctl",
-        @intFromEnum(linux.SYS.prctl) => "prctl",
-        @intFromEnum(linux.SYS.arch_prctl) => "arch_prctl",
-        @intFromEnum(linux.SYS.adjtimex) => "adjtimex",
-        @intFromEnum(linux.SYS.setrlimit) => "setrlimit",
-        @intFromEnum(linux.SYS.chroot) => "chroot",
-        @intFromEnum(linux.SYS.sync) => "sync",
-        @intFromEnum(linux.SYS.acct) => "acct",
-        @intFromEnum(linux.SYS.settimeofday) => "settimeofday",
-        @intFromEnum(linux.SYS.mount) => "mount",
-        @intFromEnum(linux.SYS.umount2) => "umount2",
-        @intFromEnum(linux.SYS.swapon) => "swapon",
-        @intFromEnum(linux.SYS.swapoff) => "swapoff",
-        @intFromEnum(linux.SYS.reboot) => "reboot",
-        @intFromEnum(linux.SYS.sethostname) => "sethostname",
-        @intFromEnum(linux.SYS.setdomainname) => "setdomainname",
-        @intFromEnum(linux.SYS.iopl) => "iopl",
-        @intFromEnum(linux.SYS.ioperm) => "ioperm",
-        @intFromEnum(linux.SYS.create_module) => "create_module",
-        @intFromEnum(linux.SYS.init_module) => "init_module",
-        @intFromEnum(linux.SYS.delete_module) => "delete_module",
-        @intFromEnum(linux.SYS.get_kernel_syms) => "get_kernel_syms",
-        @intFromEnum(linux.SYS.query_module) => "query_module",
-        @intFromEnum(linux.SYS.quotactl) => "quotactl",
-        @intFromEnum(linux.SYS.nfsservctl) => "nfsservctl",
-        @intFromEnum(linux.SYS.getpmsg) => "getpmsg",
-        @intFromEnum(linux.SYS.putpmsg) => "putpmsg",
-        @intFromEnum(linux.SYS.afs_syscall) => "afs_syscall",
-        @intFromEnum(linux.SYS.tuxcall) => "tuxcall",
-        @intFromEnum(linux.SYS.security) => "security",
-        @intFromEnum(linux.SYS.gettid) => "gettid",
-        @intFromEnum(linux.SYS.readahead) => "readahead",
-        @intFromEnum(linux.SYS.setxattr) => "setxattr",
-        @intFromEnum(linux.SYS.lsetxattr) => "lsetxattr",
-        @intFromEnum(linux.SYS.fsetxattr) => "fsetxattr",
-        @intFromEnum(linux.SYS.getxattr) => "getxattr",
-        @intFromEnum(linux.SYS.lgetxattr) => "lgetxattr",
-        @intFromEnum(linux.SYS.fgetxattr) => "fgetxattr",
-        @intFromEnum(linux.SYS.listxattr) => "listxattr",
-        @intFromEnum(linux.SYS.llistxattr) => "llistxattr",
-        @intFromEnum(linux.SYS.flistxattr) => "flistxattr",
-        @intFromEnum(linux.SYS.removexattr) => "removexattr",
-        @intFromEnum(linux.SYS.lremovexattr) => "lremovexattr",
-        @intFromEnum(linux.SYS.fremovexattr) => "fremovexattr",
-        @intFromEnum(linux.SYS.tkill) => "tkill",
-        @intFromEnum(linux.SYS.time) => "time",
-        @intFromEnum(linux.SYS.futex) => "futex",
-        @intFromEnum(linux.SYS.sched_setaffinity) => "sched_setaffinity",
-        @intFromEnum(linux.SYS.sched_getaffinity) => "sched_getaffinity",
-        @intFromEnum(linux.SYS.set_thread_area) => "set_thread_area",
-        @intFromEnum(linux.SYS.io_setup) => "io_setup",
-        @intFromEnum(linux.SYS.io_destroy) => "io_destroy",
-        @intFromEnum(linux.SYS.io_getevents) => "io_getevents",
-        @intFromEnum(linux.SYS.io_submit) => "io_submit",
-        @intFromEnum(linux.SYS.io_cancel) => "io_cancel",
-        @intFromEnum(linux.SYS.get_thread_area) => "get_thread_area",
-        @intFromEnum(linux.SYS.lookup_dcookie) => "lookup_dcookie",
-        @intFromEnum(linux.SYS.epoll_create) => "epoll_create",
-        @intFromEnum(linux.SYS.epoll_ctl_old) => "epoll_ctl_old",
-        @intFromEnum(linux.SYS.epoll_wait_old) => "epoll_wait_old",
-        @intFromEnum(linux.SYS.remap_file_pages) => "remap_file_pages",
-        @intFromEnum(linux.SYS.getdents64) => "getdents64",
-        @intFromEnum(linux.SYS.set_tid_address) => "set_tid_address",
-        @intFromEnum(linux.SYS.restart_syscall) => "restart_syscall",
-        @intFromEnum(linux.SYS.semtimedop) => "semtimedop",
-        @intFromEnum(linux.SYS.fadvise64) => "fadvise64",
-        @intFromEnum(linux.SYS.timer_create) => "timer_create",
-        @intFromEnum(linux.SYS.timer_settime) => "timer_settime",
-        @intFromEnum(linux.SYS.timer_gettime) => "timer_gettime",
-        @intFromEnum(linux.SYS.timer_getoverrun) => "timer_getoverrun",
-        @intFromEnum(linux.SYS.timer_delete) => "timer_delete",
-        @intFromEnum(linux.SYS.clock_settime) => "clock_settime",
-        @intFromEnum(linux.SYS.clock_gettime) => "clock_gettime",
-        @intFromEnum(linux.SYS.clock_getres) => "clock_getres",
-        @intFromEnum(linux.SYS.clock_nanosleep) => "clock_nanosleep",
-        @intFromEnum(linux.SYS.exit_group) => "exit_group",
-        @intFromEnum(linux.SYS.epoll_wait) => "epoll_wait",
-        @intFromEnum(linux.SYS.epoll_ctl) => "epoll_ctl",
-        @intFromEnum(linux.SYS.tgkill) => "tgkill",
-        @intFromEnum(linux.SYS.utimes) => "utimes",
-        @intFromEnum(linux.SYS.vserver) => "vserver",
-        @intFromEnum(linux.SYS.mbind) => "mbind",
-        @intFromEnum(linux.SYS.set_mempolicy) => "set_mempolicy",
-        @intFromEnum(linux.SYS.get_mempolicy) => "get_mempolicy",
-        @intFromEnum(linux.SYS.mq_open) => "mq_open",
-        @intFromEnum(linux.SYS.mq_unlink) => "mq_unlink",
-        @intFromEnum(linux.SYS.mq_timedsend) => "mq_timedsend",
-        @intFromEnum(linux.SYS.mq_timedreceive) => "mq_timedreceive",
-        @intFromEnum(linux.SYS.mq_notify) => "mq_notify",
-        @intFromEnum(linux.SYS.mq_getsetattr) => "mq_getsetattr",
-        @intFromEnum(linux.SYS.kexec_load) => "kexec_load",
-        @intFromEnum(linux.SYS.waitid) => "waitid",
-        @intFromEnum(linux.SYS.add_key) => "add_key",
-        @intFromEnum(linux.SYS.request_key) => "request_key",
-        @intFromEnum(linux.SYS.keyctl) => "keyctl",
-        @intFromEnum(linux.SYS.ioprio_set) => "ioprio_set",
-        @intFromEnum(linux.SYS.ioprio_get) => "ioprio_get",
-        @intFromEnum(linux.SYS.inotify_init) => "inotify_init",
-        @intFromEnum(linux.SYS.inotify_add_watch) => "inotify_add_watch",
-        @intFromEnum(linux.SYS.inotify_rm_watch) => "inotify_rm_watch",
-        @intFromEnum(linux.SYS.migrate_pages) => "migrate_pages",
-        @intFromEnum(linux.SYS.openat) => "openat",
-        @intFromEnum(linux.SYS.mkdirat) => "mkdirat",
-        @intFromEnum(linux.SYS.mknodat) => "mknodat",
-        @intFromEnum(linux.SYS.fchownat) => "fchownat",
-        @intFromEnum(linux.SYS.futimesat) => "futimesat",
-        @intFromEnum(linux.SYS.fstatat64) => "newfstatat",
-        @intFromEnum(linux.SYS.unlinkat) => "unlinkat",
-        @intFromEnum(linux.SYS.renameat) => "renameat",
-        @intFromEnum(linux.SYS.linkat) => "linkat",
-        @intFromEnum(linux.SYS.symlinkat) => "symlinkat",
-        @intFromEnum(linux.SYS.readlinkat) => "readlinkat",
-        @intFromEnum(linux.SYS.fchmodat) => "fchmodat",
-        @intFromEnum(linux.SYS.faccessat) => "faccessat",
-        @intFromEnum(linux.SYS.pselect6) => "pselect6",
-        @intFromEnum(linux.SYS.ppoll) => "ppoll",
-        @intFromEnum(linux.SYS.unshare) => "unshare",
-        @intFromEnum(linux.SYS.set_robust_list) => "set_robust_list",
-        @intFromEnum(linux.SYS.get_robust_list) => "get_robust_list",
-        @intFromEnum(linux.SYS.splice) => "splice",
-        @intFromEnum(linux.SYS.tee) => "tee",
-        @intFromEnum(linux.SYS.sync_file_range) => "sync_file_range",
-        @intFromEnum(linux.SYS.vmsplice) => "vmsplice",
-        @intFromEnum(linux.SYS.move_pages) => "move_pages",
-        @intFromEnum(linux.SYS.utimensat) => "utimensat",
-        @intFromEnum(linux.SYS.epoll_pwait) => "epoll_pwait",
-        @intFromEnum(linux.SYS.signalfd) => "signalfd",
-        @intFromEnum(linux.SYS.timerfd_create) => "timerfd_create",
-        @intFromEnum(linux.SYS.eventfd) => "eventfd",
-        @intFromEnum(linux.SYS.fallocate) => "fallocate",
-        @intFromEnum(linux.SYS.timerfd_settime) => "timerfd_settime",
-        @intFromEnum(linux.SYS.timerfd_gettime) => "timerfd_gettime",
-        @intFromEnum(linux.SYS.accept4) => "accept4",
-        @intFromEnum(linux.SYS.signalfd4) => "signalfd4",
-        @intFromEnum(linux.SYS.eventfd2) => "eventfd2",
-        @intFromEnum(linux.SYS.epoll_create1) => "epoll_create1",
-        @intFromEnum(linux.SYS.dup3) => "dup3",
-        @intFromEnum(linux.SYS.pipe2) => "pipe2",
-        @intFromEnum(linux.SYS.inotify_init1) => "inotify_init1",
-        @intFromEnum(linux.SYS.preadv) => "preadv",
-        @intFromEnum(linux.SYS.pwritev) => "pwritev",
-        @intFromEnum(linux.SYS.rt_tgsigqueueinfo) => "rt_tgsigqueueinfo",
-        @intFromEnum(linux.SYS.perf_event_open) => "perf_event_open",
-        @intFromEnum(linux.SYS.recvmmsg) => "recvmmsg",
-        @intFromEnum(linux.SYS.fanotify_init) => "fanotify_init",
-        @intFromEnum(linux.SYS.fanotify_mark) => "fanotify_mark",
-        @intFromEnum(linux.SYS.prlimit64) => "prlimit64",
-        @intFromEnum(linux.SYS.name_to_handle_at) => "name_to_handle_at",
-        @intFromEnum(linux.SYS.open_by_handle_at) => "open_by_handle_at",
-        @intFromEnum(linux.SYS.clock_adjtime) => "clock_adjtime",
-        @intFromEnum(linux.SYS.syncfs) => "syncfs",
-        @intFromEnum(linux.SYS.sendmmsg) => "sendmmsg",
-        @intFromEnum(linux.SYS.setns) => "setns",
-        @intFromEnum(linux.SYS.getcpu) => "getcpu",
-        @intFromEnum(linux.SYS.process_vm_readv) => "process_vm_readv",
-        @intFromEnum(linux.SYS.process_vm_writev) => "process_vm_writev",
-        @intFromEnum(linux.SYS.kcmp) => "kcmp",
-        @intFromEnum(linux.SYS.finit_module) => "finit_module",
-        @intFromEnum(linux.SYS.sched_setattr) => "sched_setattr",
-        @intFromEnum(linux.SYS.sched_getattr) => "sched_getattr",
-        @intFromEnum(linux.SYS.renameat2) => "renameat2",
-        @intFromEnum(linux.SYS.seccomp) => "seccomp",
-        @intFromEnum(linux.SYS.getrandom) => "getrandom",
-        @intFromEnum(linux.SYS.memfd_create) => "memfd_create",
-        @intFromEnum(linux.SYS.kexec_file_load) => "kexec_file_load",
-        @intFromEnum(linux.SYS.bpf) => "bpf",
-        @intFromEnum(linux.SYS.execveat) => "execveat",
-        @intFromEnum(linux.SYS.userfaultfd) => "userfaultfd",
-        @intFromEnum(linux.SYS.membarrier) => "membarrier",
-        @intFromEnum(linux.SYS.mlock2) => "mlock2",
-        @intFromEnum(linux.SYS.copy_file_range) => "copy_file_range",
-        @intFromEnum(linux.SYS.preadv2) => "preadv2",
-        @intFromEnum(linux.SYS.pwritev2) => "pwritev2",
-        @intFromEnum(linux.SYS.pkey_mprotect) => "pkey_mprotect",
-        @intFromEnum(linux.SYS.pkey_alloc) => "pkey_alloc",
-        @intFromEnum(linux.SYS.pkey_free) => "pkey_free",
-        @intFromEnum(linux.SYS.statx) => "statx",
-        @intFromEnum(linux.SYS.io_pgetevents) => "io_pgetevents",
-        @intFromEnum(linux.SYS.rseq) => "rseq",
-        @intFromEnum(linux.SYS.uretprobe) => "uretprobe",
-        @intFromEnum(linux.SYS.pidfd_send_signal) => "pidfd_send_signal",
-        @intFromEnum(linux.SYS.io_uring_setup) => "io_uring_setup",
-        @intFromEnum(linux.SYS.io_uring_enter) => "io_uring_enter",
-        @intFromEnum(linux.SYS.io_uring_register) => "io_uring_register",
-        @intFromEnum(linux.SYS.open_tree) => "open_tree",
-        @intFromEnum(linux.SYS.move_mount) => "move_mount",
-        @intFromEnum(linux.SYS.fsopen) => "fsopen",
-        @intFromEnum(linux.SYS.fsconfig) => "fsconfig",
-        @intFromEnum(linux.SYS.fsmount) => "fsmount",
-        @intFromEnum(linux.SYS.fspick) => "fspick",
-        @intFromEnum(linux.SYS.pidfd_open) => "pidfd_open",
-        @intFromEnum(linux.SYS.clone3) => "clone3",
-        @intFromEnum(linux.SYS.close_range) => "close_range",
-        @intFromEnum(linux.SYS.openat2) => "openat2",
-        @intFromEnum(linux.SYS.pidfd_getfd) => "pidfd_getfd",
-        @intFromEnum(linux.SYS.faccessat2) => "faccessat2",
-        @intFromEnum(linux.SYS.process_madvise) => "process_madvise",
-        @intFromEnum(linux.SYS.epoll_pwait2) => "epoll_pwait2",
-        @intFromEnum(linux.SYS.mount_setattr) => "mount_setattr",
-        @intFromEnum(linux.SYS.quotactl_fd) => "quotactl_fd",
-        @intFromEnum(linux.SYS.landlock_create_ruleset) => "landlock_create_ruleset",
-        @intFromEnum(linux.SYS.landlock_add_rule) => "landlock_add_rule",
-        @intFromEnum(linux.SYS.landlock_restrict_self) => "landlock_restrict_self",
-        @intFromEnum(linux.SYS.memfd_secret) => "memfd_secret",
-        @intFromEnum(linux.SYS.process_mrelease) => "process_mrelease",
-        @intFromEnum(linux.SYS.futex_waitv) => "futex_waitv",
-        @intFromEnum(linux.SYS.set_mempolicy_home_node) => "set_mempolicy_home_node",
-        @intFromEnum(linux.SYS.cachestat) => "cachestat",
-        @intFromEnum(linux.SYS.fchmodat2) => "fchmodat2",
-        @intFromEnum(linux.SYS.map_shadow_stack) => "map_shadow_stack",
-        @intFromEnum(linux.SYS.futex_wake) => "futex_wake",
-        @intFromEnum(linux.SYS.futex_wait) => "futex_wait",
-        @intFromEnum(linux.SYS.futex_requeue) => "futex_requeue",
-        @intFromEnum(linux.SYS.statmount) => "statmount",
-        @intFromEnum(linux.SYS.listmount) => "listmount",
-        @intFromEnum(linux.SYS.lsm_get_self_attr) => "lsm_get_self_attr",
-        @intFromEnum(linux.SYS.lsm_set_self_attr) => "lsm_set_self_attr",
-        @intFromEnum(linux.SYS.lsm_list_modules) => "lsm_list_modules",
-        @intFromEnum(linux.SYS.mseal) => "mseal",
-        else => "unknown",
+fn getSysCallArgs(regs: c.user_regs_struct) [6]u64 {
+    return switch (@import("builtin").cpu.arch) {
+        .x86_64 => [6]u64{
+            regs.rdi,
+            regs.rsi,
+            regs.rdx,
+            regs.r10,
+            regs.r8,
+            regs.r9,
+        },
+        .aarch64 => [6]u64{
+            regs.regs[0],
+            regs.regs[1],
+            regs.regs[2],
+            regs.regs[3],
+            regs.regs[4],
+            regs.regs[5],
+        },
+        else => [6]u64{ 0, 0, 0, 0, 0, 0 },
     };
 }
 
-fn getErrorName(errnum: i64) []const u8 {
-    const err_num = -errnum;
-    return switch (err_num) {
-        @intFromEnum(linux.E.PERM) => "EPERM",
-        @intFromEnum(linux.E.NOENT) => "ENOENT",
-        @intFromEnum(linux.E.SRCH) => "ESRCH",
-        @intFromEnum(linux.E.INTR) => "EINTR",
-        @intFromEnum(linux.E.IO) => "EIO",
-        @intFromEnum(linux.E.NXIO) => "ENXIO",
-        @intFromEnum(linux.E.@"2BIG") => "E2BIG",
-        @intFromEnum(linux.E.NOEXEC) => "ENOEXEC",
-        @intFromEnum(linux.E.BADF) => "EBADF",
-        @intFromEnum(linux.E.CHILD) => "ECHILD",
-        @intFromEnum(linux.E.AGAIN) => "EAGAIN",
-        @intFromEnum(linux.E.NOMEM) => "ENOMEM",
-        @intFromEnum(linux.E.ACCES) => "EACCES",
-        @intFromEnum(linux.E.FAULT) => "EFAULT",
-        @intFromEnum(linux.E.NOTBLK) => "ENOTBLK",
-        @intFromEnum(linux.E.BUSY) => "EBUSY",
-        @intFromEnum(linux.E.EXIST) => "EEXIST",
-        @intFromEnum(linux.E.XDEV) => "EXDEV",
-        @intFromEnum(linux.E.NODEV) => "ENODEV",
-        @intFromEnum(linux.E.NOTDIR) => "ENOTDIR",
-        @intFromEnum(linux.E.ISDIR) => "EISDIR",
-        @intFromEnum(linux.E.INVAL) => "EINVAL",
-        @intFromEnum(linux.E.NFILE) => "ENFILE",
-        @intFromEnum(linux.E.MFILE) => "EMFILE",
-        @intFromEnum(linux.E.NOTTY) => "ENOTTY",
-        @intFromEnum(linux.E.TXTBSY) => "ETXTBSY",
-        @intFromEnum(linux.E.FBIG) => "EFBIG",
-        @intFromEnum(linux.E.NOSPC) => "ENOSPC",
-        @intFromEnum(linux.E.SPIPE) => "ESPIPE",
-        @intFromEnum(linux.E.ROFS) => "EROFS",
-        @intFromEnum(linux.E.MLINK) => "EMLINK",
-        @intFromEnum(linux.E.PIPE) => "EPIPE",
-        @intFromEnum(linux.E.DOM) => "EDOM",
-        @intFromEnum(linux.E.RANGE) => "ERANGE",
-        @intFromEnum(linux.E.DEADLK) => "EDEADLK",
-        @intFromEnum(linux.E.NAMETOOLONG) => "ENAMETOOLONG",
-        @intFromEnum(linux.E.NOLCK) => "ENOLCK",
-        @intFromEnum(linux.E.NOSYS) => "ENOSYS",
-        @intFromEnum(linux.E.NOTEMPTY) => "ENOTEMPTY",
-        @intFromEnum(linux.E.LOOP) => "ELOOP",
-        //c.EWOULDBLOCK => "EWOULDBLOCK",
-        @intFromEnum(linux.E.NOMSG) => "ENOMSG",
-        @intFromEnum(linux.E.IDRM) => "EIDRM",
-        @intFromEnum(linux.E.CHRNG) => "ECHRNG",
-        @intFromEnum(linux.E.L2NSYNC) => "EL2NSYNC",
-        @intFromEnum(linux.E.L3HLT) => "EL3HLT",
-        @intFromEnum(linux.E.L3RST) => "EL3RST",
-        @intFromEnum(linux.E.LNRNG) => "ELNRNG",
-        @intFromEnum(linux.E.UNATCH) => "EUNATCH",
-        @intFromEnum(linux.E.NOCSI) => "ENOCSI",
-        @intFromEnum(linux.E.L2HLT) => "EL2HLT",
-        @intFromEnum(linux.E.BADE) => "EBADE",
-        @intFromEnum(linux.E.BADR) => "EBADR",
-        @intFromEnum(linux.E.XFULL) => "EXFULL",
-        @intFromEnum(linux.E.NOANO) => "ENOANO",
-        @intFromEnum(linux.E.BADRQC) => "EBADRQC",
-        @intFromEnum(linux.E.BADSLT) => "EBADSLT",
-        // c.EDEADLOCK => "EDEADLOCK",
-        @intFromEnum(linux.E.BFONT) => "EBFONT",
-        @intFromEnum(linux.E.NOSTR) => "ENOSTR",
-        @intFromEnum(linux.E.NODATA) => "ENODATA",
-        @intFromEnum(linux.E.TIME) => "ETIME",
-        @intFromEnum(linux.E.NOSR) => "ENOSR",
-        @intFromEnum(linux.E.NONET) => "ENONET",
-        @intFromEnum(linux.E.NOPKG) => "ENOPKG",
-        @intFromEnum(linux.E.REMOTE) => "EREMOTE",
-        @intFromEnum(linux.E.NOLINK) => "ENOLINK",
-        @intFromEnum(linux.E.ADV) => "EADV",
-        @intFromEnum(linux.E.SRMNT) => "ESRMNT",
-        @intFromEnum(linux.E.COMM) => "ECOMM",
-        @intFromEnum(linux.E.PROTO) => "EPROTO",
-        @intFromEnum(linux.E.MULTIHOP) => "EMULTIHOP",
-        @intFromEnum(linux.E.DOTDOT) => "EDOTDOT",
-        @intFromEnum(linux.E.BADMSG) => "EBADMSG",
-        @intFromEnum(linux.E.OVERFLOW) => "EOVERFLOW",
-        @intFromEnum(linux.E.NOTUNIQ) => "ENOTUNIQ",
-        @intFromEnum(linux.E.BADFD) => "EBADFD",
-        @intFromEnum(linux.E.REMCHG) => "EREMCHG",
-        @intFromEnum(linux.E.LIBACC) => "ELIBACC",
-        @intFromEnum(linux.E.LIBBAD) => "ELIBBAD",
-        @intFromEnum(linux.E.LIBSCN) => "ELIBSCN",
-        @intFromEnum(linux.E.LIBMAX) => "ELIBMAX",
-        @intFromEnum(linux.E.LIBEXEC) => "ELIBEXEC",
-        @intFromEnum(linux.E.ILSEQ) => "EILSEQ",
-        @intFromEnum(linux.E.RESTART) => "ERESTART",
-        @intFromEnum(linux.E.STRPIPE) => "ESTRPIPE",
-        @intFromEnum(linux.E.USERS) => "EUSERS",
-        @intFromEnum(linux.E.NOTSOCK) => "ENOTSOCK",
-        @intFromEnum(linux.E.DESTADDRREQ) => "EDESTADDRREQ",
-        @intFromEnum(linux.E.MSGSIZE) => "EMSGSIZE",
-        @intFromEnum(linux.E.PROTOTYPE) => "EPROTOTYPE",
-        @intFromEnum(linux.E.NOPROTOOPT) => "ENOPROTOOPT",
-        @intFromEnum(linux.E.PROTONOSUPPORT) => "EPROTONOSUPPORT",
-        @intFromEnum(linux.E.SOCKTNOSUPPORT) => "ESOCKTNOSUPPORT",
-        @intFromEnum(linux.E.OPNOTSUPP) => "EOPNOTSUPP",
-        @intFromEnum(linux.E.PFNOSUPPORT) => "EPFNOSUPPORT",
-        @intFromEnum(linux.E.AFNOSUPPORT) => "EAFNOSUPPORT",
-        @intFromEnum(linux.E.ADDRINUSE) => "EADDRINUSE",
-        @intFromEnum(linux.E.ADDRNOTAVAIL) => "EADDRNOTAVAIL",
-        @intFromEnum(linux.E.NETDOWN) => "ENETDOWN",
-        @intFromEnum(linux.E.NETUNREACH) => "ENETUNREACH",
-        @intFromEnum(linux.E.NETRESET) => "ENETRESET",
-        @intFromEnum(linux.E.CONNABORTED) => "ECONNABORTED",
-        @intFromEnum(linux.E.CONNRESET) => "ECONNRESET",
-        @intFromEnum(linux.E.NOBUFS) => "ENOBUFS",
-        @intFromEnum(linux.E.ISCONN) => "EISCONN",
-        @intFromEnum(linux.E.NOTCONN) => "ENOTCONN",
-        @intFromEnum(linux.E.SHUTDOWN) => "ESHUTDOWN",
-        @intFromEnum(linux.E.TOOMANYREFS) => "ETOOMANYREFS",
-        @intFromEnum(linux.E.TIMEDOUT) => "ETIMEDOUT",
-        @intFromEnum(linux.E.CONNREFUSED) => "ECONNREFUSED",
-        @intFromEnum(linux.E.HOSTDOWN) => "EHOSTDOWN",
-        @intFromEnum(linux.E.HOSTUNREACH) => "EHOSTUNREACH",
-        @intFromEnum(linux.E.ALREADY) => "EALREADY",
-        @intFromEnum(linux.E.INPROGRESS) => "EINPROGRESS",
-        @intFromEnum(linux.E.STALE) => "ESTALE",
-        @intFromEnum(linux.E.UCLEAN) => "EUCLEAN",
-        @intFromEnum(linux.E.NOTNAM) => "ENOTNAM",
-        @intFromEnum(linux.E.NAVAIL) => "ENAVAIL",
-        @intFromEnum(linux.E.ISNAM) => "EISNAM",
-        @intFromEnum(linux.E.REMOTEIO) => "EREMOTEIO",
-        @intFromEnum(linux.E.DQUOT) => "EDQUOT",
-        @intFromEnum(linux.E.NOMEDIUM) => "ENOMEDIUM",
-        @intFromEnum(linux.E.MEDIUMTYPE) => "EMEDIUMTYPE",
-        @intFromEnum(linux.E.CANCELED) => "ECANCELED",
-        @intFromEnum(linux.E.NOKEY) => "ENOKEY",
-        @intFromEnum(linux.E.KEYEXPIRED) => "EKEYEXPIRED",
-        @intFromEnum(linux.E.KEYREVOKED) => "EKEYREVOKED",
-        @intFromEnum(linux.E.KEYREJECTED) => "EKEYREJECTED",
-        @intFromEnum(linux.E.OWNERDEAD) => "EOWNERDEAD",
-        @intFromEnum(linux.E.NOTRECOVERABLE) => "ENOTRECOVERABLE",
-        @intFromEnum(linux.E.RFKILL) => "ERFKILL",
-        @intFromEnum(linux.E.HWPOISON) => "EHWPOISON",
-        // ENOTSUP = EOPNOTSUPP
-        else => "",
-    };
+// mmap, openat, ioctl, access, rseq
+fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num: i64) !void {
+    switch (syscall_num) {
+        @intFromEnum(linux.SYS.read), @intFromEnum(linux.SYS.write) => {
+            // read(fd, buf, count) / write(fd, buf, count)
+            std.debug.print("{d}, 0x{x}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
+        },
+        @intFromEnum(linux.SYS.open), @intFromEnum(linux.SYS.openat) => {
+            // open(pathname, flags, mode) / openat(dirfd, pathname, flags, mode)
+            if (syscall_num == @intFromEnum(linux.SYS.openat)) {
+                const dirfd: i32 = @truncate(@as(i64, @bitCast(rargs[0])));
+                if (dirfd == linux.AT.FDCWD) {
+                    std.debug.print("AT_FDCWD, ", .{});
+                } else {
+                    std.debug.print("{d}, ", .{dirfd});
+                }
+                if (rargs[1] != 0) {
+                    const path = readStringFromProcess(gpa, pid, rargs[1]) catch {
+                        std.debug.print("0x{x}, {s}", .{ rargs[1], try syscall.openFlagsToString(rargs[2]) });
+                        return;
+                    };
+                    defer gpa.free(path);
+                    std.debug.print("\"{s}\", {s}", .{ path, try syscall.openFlagsToString(rargs[2]) });
+                } else {
+                    std.debug.print("0x{x}, {s}", .{ rargs[1], try syscall.openFlagsToString(rargs[2]) });
+                }
+            } else {
+                if (rargs[0] != 0) {
+                    const path = readStringFromProcess(gpa, pid, rargs[0]) catch {
+                        std.debug.print("0x{x}, {s}", .{ rargs[0], try syscall.openFlagsToString(rargs[1]) });
+                        return;
+                    };
+                    defer gpa.free(path);
+                    std.debug.print("\"{s}\", {s}", .{ path, try syscall.openFlagsToString(rargs[1]) });
+                } else {
+                    std.debug.print("0x{x}, {s}", .{ rargs[0], try syscall.openFlagsToString(rargs[1]) });
+                }
+            }
+        },
+        @intFromEnum(linux.SYS.close) => {
+            // close(fd)
+            std.debug.print("{d}", .{@as(i32, @bitCast(@as(u32, @truncate(rargs[0]))))});
+        },
+        @intFromEnum(linux.SYS.fstat), @intFromEnum(linux.SYS.stat), @intFromEnum(linux.SYS.lstat) => {
+            // fstat(fd, statbuf) / stat(pathname, statbuf) / lstat(pathname, statbuf)
+            if (syscall_num == @intFromEnum(linux.SYS.fstat)) {
+                std.debug.print("{d}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1] });
+            } else {
+                const path = try readStringFromProcess(gpa, pid, rargs[0]);
+                defer gpa.free(path);
+                std.debug.print("\"{s}\", 0x{x}", .{ path, rargs[1] });
+            }
+        },
+        @intFromEnum(linux.SYS.mmap) => {
+            // mmap(addr, length, prot, flags, fd, offset)
+            var buff: [1024]u8 = undefined;
+            const addr_str = if (rargs[0] == 0) "NULL" else try std.fmt.bufPrint(&buff, "0x{x}", .{rargs[0]});
+            const z_hex = if (rargs[5] == 0) "0" else try std.fmt.bufPrint(&buff, "0x{x}", .{rargs[0]});
+            std.debug.print("{s}, {d}, {s}, {s}, {d}, {s}", .{ addr_str, rargs[1], syscall.mmapProtToString(rargs[2]), syscall.mmapFlagsToString(rargs[3]), @as(i32, @bitCast(@as(u32, @truncate(rargs[4])))), z_hex });
+        },
+        @intFromEnum(linux.SYS.mprotect) => {
+            // mprotect(addr, len, prot)
+            std.debug.print("0x{x}, {d}, {s}", .{ rargs[0], rargs[1], syscall.mmapProtToString(rargs[2]) });
+        },
+        @intFromEnum(linux.SYS.munmap) => {
+            // munmap(addr, length)
+            std.debug.print("0x{x}, {d}", .{ rargs[0], rargs[1] });
+        },
+        @intFromEnum(linux.SYS.brk) => {
+            // brk(addr)
+            if (rargs[0] == 0) {
+                std.debug.print("NULL", .{});
+            } else {
+                std.debug.print("0x{x}", .{rargs[0]});
+            }
+        },
+        @intFromEnum(linux.SYS.getpid), @intFromEnum(linux.SYS.getuid), @intFromEnum(linux.SYS.getgid), @intFromEnum(linux.SYS.geteuid), @intFromEnum(linux.SYS.getegid), @intFromEnum(linux.SYS.gettid) => {},
+        @intFromEnum(linux.SYS.access) => {
+            // access(pathname, mode)
+            if (rargs[0] != 0) {
+                const path = readStringFromProcess(gpa, pid, rargs[0]) catch {
+                    std.debug.print("0x{x}, {s}", .{ rargs[0], try syscall.accessModeToString(rargs[1]) });
+                    return;
+                };
+                defer gpa.free(path);
+                std.debug.print("\"{s}\", {s}", .{ path, try syscall.accessModeToString(rargs[1]) });
+            } else {
+                std.debug.print("0x{x}, {s}", .{ rargs[0], try syscall.accessModeToString(rargs[1]) });
+            }
+        },
+        @intFromEnum(linux.SYS.faccessat) => {
+            // faccessat(dirfd, pathname, mode, flags)
+            const dirfd: i32 = @truncate(@as(i64, @bitCast(rargs[0])));
+            if (dirfd == linux.AT.FDCWD) {
+                std.debug.print("AT_FDCWD, ", .{});
+            } else {
+                std.debug.print("{d}, ", .{dirfd});
+            }
+            if (rargs[1] != 0) {
+                // for see linux.AT
+                const path = readStringFromProcess(gpa, pid, rargs[1]) catch {
+                    std.debug.print("0x{x}, {s}, {d}", .{ rargs[1], try syscall.accessModeToString(rargs[2]), rargs[3] });
+                    return;
+                };
+                defer gpa.free(path);
+                std.debug.print("\"{s}\", {s}, {d}", .{ path, try syscall.accessModeToString(rargs[2]), rargs[3] });
+            } else {
+                std.debug.print("0x{x}, {s}, {d}", .{ rargs[1], try syscall.accessModeToString(rargs[2]), rargs[3] });
+            }
+        },
+        @intFromEnum(linux.SYS.execve) => {
+            // execve(pathname, argv, envp)
+            const path = try readStringFromProcess(gpa, pid, rargs[0]);
+            defer gpa.free(path);
+            std.debug.print("\"{s}\", ..., ...", .{path});
+        },
+        @intFromEnum(linux.SYS.getdents64) => {
+            // getdents64(fd, dirp, count)
+            std.debug.print("{d}, 0x{x}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
+        },
+        @intFromEnum(linux.SYS.pread64), @intFromEnum(linux.SYS.pwrite64) => {
+            // pread64(fd, buf, count, offset) / pwrite64(fd, buf, count, offset)
+            std.debug.print("{d}, 0x{x}, {d}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2], rargs[3] });
+        },
+        @intFromEnum(linux.SYS.ioctl) => {
+            // ioctl(fd, request, ...)
+            std.debug.print("{d}, 0x{x}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
+        },
+        @intFromEnum(linux.SYS.arch_prctl) => {
+            // arch_prctl(option, addr)
+            var buff: [1024]u8 = undefined;
+            const option = if (rargs[0] == 0x1002) "ARCH_SET_FS" else try std.fmt.bufPrint(&buff, "0x{x}", .{rargs[0]});
+            std.debug.print("{s}, 0x{x}", .{ option, rargs[1] });
+        },
+        @intFromEnum(linux.SYS.set_tid_address) => {
+            // set_tid_address(tidptr)
+            std.debug.print("0x{x}", .{rargs[0]});
+        },
+        @intFromEnum(linux.SYS.set_robust_list) => {
+            // set_robust_list(head, len)
+            std.debug.print("0x{x}, {d}", .{ rargs[0], rargs[1] });
+        },
+        @intFromEnum(linux.SYS.rseq) => {
+            // rseq(rseq, rseq_len, flags, sig)
+            std.debug.print("0x{x}, 0x{x}, {d}, 0x{x}", .{ rargs[0], rargs[1], rargs[2], rargs[3] });
+        },
+        @intFromEnum(linux.SYS.prlimit64) => {
+            // prlimit64(pid, resource, new_limit, old_limit)
+            const rlimit = syscall.mapRlimittoString(rargs[1]);
+            std.debug.print("{d}, RLIMIT_{s}, 0x{x}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rlimit, rargs[2], rargs[3] });
+        },
+        @intFromEnum(linux.SYS.prctl) => {
+            // prctl(option, arg2, arg3, arg4, arg5)
+            std.debug.print("{d}, 0x{x}, 0x{x}, 0x{x}, 0x{x}", .{ rargs[0], rargs[1], rargs[2], rargs[3], rargs[4] });
+        },
+        @intFromEnum(linux.SYS.statfs) => {
+            // statfs(path, buf)
+            if (rargs[0] != 0) {
+                const path = readStringFromProcess(gpa, pid, rargs[0]) catch {
+                    std.debug.print("0x{x}, 0x{x}", .{ rargs[0], rargs[1] });
+                    return;
+                };
+                defer gpa.free(path);
+                std.debug.print("\"{s}\", 0x{x}", .{ path, rargs[1] });
+            } else {
+                std.debug.print("0x{x}, 0x{x}", .{ rargs[0], rargs[1] });
+            }
+        },
+        @intFromEnum(linux.SYS.getrandom) => {
+            // getrandom(buf, buflen, flags)
+            std.debug.print("0x{x}, {d}, GRND_NONBLOCK", .{ rargs[0], rargs[1] });
+        },
+        @intFromEnum(linux.SYS.exit_group) => {
+            // exit_group(status)
+            std.debug.print("{d}", .{@as(i32, @bitCast(@as(u32, @truncate(rargs[0]))))});
+        },
+        else => {
+            // Default: print raw arguments
+            std.debug.print("0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x}", .{ rargs[0], rargs[1], rargs[2], rargs[3], rargs[4], rargs[5] });
+        },
+    }
 }
 
-fn getErrorDescription(errnum: i64) []const u8 {
-    const err_num = -errnum;
-    return switch (err_num) {
-        @intFromEnum(linux.E.NOENT) => "No Such File or Directory",
-        @intFromEnum(linux.E.ACCES) => "Permission Denied",
-        @intFromEnum(linux.E.INVAL) => "Invalid Argument",
-        @intFromEnum(linux.E.NOMEM) => "Cannot Allocate Memory",
-        @intFromEnum(linux.E.FAULT) => "Bad Address",
-        else => "",
-    };
+fn printEscapedString(str: []const u8) !void {
+    for (str) |ch| {
+        switch (ch) {
+            '\n' => std.debug.print("\\n", .{}),
+            '\r' => std.debug.print("\\r", .{}),
+            '\t' => std.debug.print("\\t", .{}),
+            '\\' => std.debug.print("\\\\", .{}),
+            '"' => std.debug.print("\\\"", .{}),
+            0x20...0x21 => std.debug.print("{c}", .{ch}),
+            0x23...0x5b => std.debug.print("{c}", .{ch}),
+            0x5d...0x7e => std.debug.print("{c}", .{ch}),
+            else => std.debug.print("\\x{x:0>2}", .{ch}),
+        }
+    }
+}
+
+fn readStringFromProcess(allocator: std.mem.Allocator, pid: i32, addr: u64) ![]u8 {
+    if (addr == 0) return try allocator.dupe(u8, "NULL");
+
+    var result = std.ArrayList(u8).empty;
+    errdefer result.deinit(allocator);
+
+    var current_addr = addr;
+    var consecutive_failures: u32 = 0;
+
+    while (result.items.len < 4096) { // Max 4KB strings
+        const val = linux.ptrace(linux.PTRACE.PEEKDATA, pid, current_addr, 0, 0);
+
+        // If we get -1 and have already started reading, we might have hit the end
+        if (val == -1) {
+            consecutive_failures += 1;
+            if (consecutive_failures > 2 or result.items.len == 0) {
+                // Failed to read, return address as hex if we got nothing
+                if (result.items.len == 0) {
+                    return try std.fmt.allocPrint(allocator, "0x{x}", .{addr});
+                }
+                break;
+            }
+            current_addr += 8;
+            continue;
+        }
+
+        consecutive_failures = 0;
+        const word: u64 = @bitCast(val);
+
+        // Read 8 bytes at a time
+        for (0..8) |i| {
+            const byte: u8 = @truncate((word >> @intCast(i * 8)) & 0xFF);
+            if (byte == 0) {
+                const owned = try result.toOwnedSlice(allocator);
+                // If string is empty or has only non-printables, return address
+                if (owned.len == 0) {
+                    allocator.free(owned);
+                    return try std.fmt.allocPrint(allocator, "0x{x}", .{addr});
+                }
+                return owned;
+            }
+
+            // Only add printable ASCII characters
+            if ((byte >= 32 and byte <= 126) or byte == '\t' or byte == '\n' or byte == '\r') {
+                try result.append(allocator, byte);
+            } else {
+                // Hit a non-printable, likely not a valid string
+                // But keep going in case it's UTF-8 or similar
+                if (i == 0 and result.items.len == 0) {
+                    // Very first byte is non-printable, probably not a string
+                    return try std.fmt.allocPrint(allocator, "0x{x}", .{addr});
+                }
+            }
+
+            // Limit string length
+            if (result.items.len >= 256) {
+                try result.appendSlice(allocator, "...");
+                return try result.toOwnedSlice(allocator);
+            }
+        }
+        current_addr += 8;
+    }
+
+    if (result.items.len == 0) {
+        return try std.fmt.allocPrint(allocator, "0x{x}", .{addr});
+    }
+
+    return try result.toOwnedSlice(allocator);
+}
+
+fn readMemoryFromProcess(allocator: std.mem.Allocator, pid: i32, addr: u64, len: usize) ![]u8 {
+    var result = try allocator.alloc(u8, len);
+    errdefer allocator.free(result);
+
+    var offset: usize = 0;
+    while (offset < len) {
+        const word_addr = addr +% offset;
+        const word = linux.ptrace(linux.PTRACE.PEEKDATA, pid, @intCast(word_addr), 0, 0);
+
+        if (word == -1) {
+            return error.ReadFailed;
+        }
+
+        const bytes = std.mem.asBytes(&word);
+        const to_copy = @min(bytes.len, len - offset);
+        @memcpy(result[offset..][0..to_copy], bytes[0..to_copy]);
+        offset += to_copy;
+    }
+
+    return result;
+}
+
+fn readArgvArray(allocator: std.mem.Allocator, pid: c_int, argv_ptr: u64) ![]u8 {
+    var result = std.ArrayList(u8).empty;
+    errdefer result.deinit(allocator);
+
+    try result.appendSlice(allocator, "[");
+
+    var i: usize = 0;
+    while (i < 10) : (i += 1) {
+        const ptr_addr = argv_ptr +% (i * @sizeOf(usize));
+        const ptr_val = linux.ptrace(linux.PTRACE.PEEKDATA, pid, @intCast(ptr_addr), 0, 0);
+
+        if (ptr_val == 0 or ptr_val == -1) break;
+
+        if (i > 0) try result.appendSlice(allocator, ", ");
+
+        const str = readStringFromProcess(allocator, pid, @intCast(ptr_val)) catch {
+            try result.appendSlice(allocator, "\"...\"");
+            continue;
+        };
+        defer allocator.free(str);
+
+        try result.append(allocator, '"');
+        try result.appendSlice(allocator, str);
+        try result.append(allocator, '"');
+    }
+
+    try result.appendSlice(allocator, "]");
+    return result.toOwnedSlice(allocator);
 }
