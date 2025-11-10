@@ -637,3 +637,107 @@ pub fn mmapFlagsToString(flags: u64) []const u8 {
 
     return "MAP_???";
 }
+
+pub fn mapPrToString(pr: u64) []const u8 {
+    return switch (pr) {
+        @intFromEnum(linux.PR.SET_PDEATHSIG) => @tagName(linux.PR.SET_PDEATHSIG),
+        @intFromEnum(linux.PR.GET_PDEATHSIG) => @tagName(linux.PR.GET_PDEATHSIG),
+        @intFromEnum(linux.PR.GET_DUMPABLE) => @tagName(linux.PR.GET_DUMPABLE),
+        @intFromEnum(linux.PR.SET_DUMPABLE) => @tagName(linux.PR.SET_DUMPABLE),
+        @intFromEnum(linux.PR.GET_UNALIGN) => @tagName(linux.PR.GET_UNALIGN),
+        @intFromEnum(linux.PR.SET_UNALIGN) => @tagName(linux.PR.SET_UNALIGN),
+        @intFromEnum(linux.PR.GET_KEEPCAPS) => @tagName(linux.PR.GET_KEEPCAPS),
+        @intFromEnum(linux.PR.SET_KEEPCAPS) => @tagName(linux.PR.SET_KEEPCAPS),
+        @intFromEnum(linux.PR.GET_FPEMU) => @tagName(linux.PR.GET_FPEMU),
+        @intFromEnum(linux.PR.SET_FPEMU) => @tagName(linux.PR.SET_FPEMU),
+        @intFromEnum(linux.PR.GET_FPEXC) => @tagName(linux.PR.GET_FPEXC),
+        @intFromEnum(linux.PR.SET_FPEXC) => @tagName(linux.PR.SET_FPEXC),
+        @intFromEnum(linux.PR.GET_TIMING) => @tagName(linux.PR.GET_TIMING),
+        @intFromEnum(linux.PR.SET_TIMING) => @tagName(linux.PR.SET_TIMING),
+        @intFromEnum(linux.PR.SET_NAME) => @tagName(linux.PR.SET_NAME),
+        @intFromEnum(linux.PR.GET_NAME) => @tagName(linux.PR.GET_NAME),
+        @intFromEnum(linux.PR.GET_ENDIAN) => @tagName(linux.PR.GET_ENDIAN),
+        @intFromEnum(linux.PR.SET_ENDIAN) => @tagName(linux.PR.SET_ENDIAN),
+        @intFromEnum(linux.PR.GET_SECCOMP) => @tagName(linux.PR.GET_SECCOMP),
+        @intFromEnum(linux.PR.SET_SECCOMP) => @tagName(linux.PR.SET_SECCOMP),
+        @intFromEnum(linux.PR.CAPBSET_READ) => @tagName(linux.PR.CAPBSET_READ),
+        @intFromEnum(linux.PR.CAPBSET_DROP) => @tagName(linux.PR.CAPBSET_DROP),
+        @intFromEnum(linux.PR.GET_TSC) => @tagName(linux.PR.GET_TSC),
+        @intFromEnum(linux.PR.SET_TSC) => @tagName(linux.PR.SET_TSC),
+        @intFromEnum(linux.PR.GET_SECUREBITS) => @tagName(linux.PR.GET_SECUREBITS),
+        @intFromEnum(linux.PR.SET_SECUREBITS) => @tagName(linux.PR.SET_SECUREBITS),
+        @intFromEnum(linux.PR.SET_TIMERSLACK) => @tagName(linux.PR.SET_TIMERSLACK),
+        @intFromEnum(linux.PR.GET_TIMERSLACK) => @tagName(linux.PR.GET_TIMERSLACK),
+        @intFromEnum(linux.PR.TASK_PERF_EVENTS_DISABLE) => @tagName(linux.PR.TASK_PERF_EVENTS_DISABLE),
+        @intFromEnum(linux.PR.TASK_PERF_EVENTS_ENABLE) => @tagName(linux.PR.TASK_PERF_EVENTS_ENABLE),
+        @intFromEnum(linux.PR.MCE_KILL) => @tagName(linux.PR.MCE_KILL),
+        @intFromEnum(linux.PR.MCE_KILL_GET) => @tagName(linux.PR.MCE_KILL_GET),
+        @intFromEnum(linux.PR.SET_MM) => @tagName(linux.PR.SET_MM),
+        @intFromEnum(linux.PR.SET_PTRACER) => @tagName(linux.PR.SET_PTRACER),
+        @intFromEnum(linux.PR.SET_CHILD_SUBREAPER) => @tagName(linux.PR.SET_CHILD_SUBREAPER),
+        @intFromEnum(linux.PR.GET_CHILD_SUBREAPER) => @tagName(linux.PR.GET_CHILD_SUBREAPER),
+        @intFromEnum(linux.PR.SET_NO_NEW_PRIVS) => @tagName(linux.PR.SET_NO_NEW_PRIVS),
+        @intFromEnum(linux.PR.GET_NO_NEW_PRIVS) => @tagName(linux.PR.GET_NO_NEW_PRIVS),
+        @intFromEnum(linux.PR.GET_TID_ADDRESS) => @tagName(linux.PR.GET_TID_ADDRESS),
+        @intFromEnum(linux.PR.SET_THP_DISABLE) => @tagName(linux.PR.SET_THP_DISABLE),
+        @intFromEnum(linux.PR.GET_THP_DISABLE) => @tagName(linux.PR.GET_THP_DISABLE),
+        @intFromEnum(linux.PR.MPX_ENABLE_MANAGEMENT) => @tagName(linux.PR.MPX_ENABLE_MANAGEMENT),
+        @intFromEnum(linux.PR.MPX_DISABLE_MANAGEMENT) => @tagName(linux.PR.MPX_DISABLE_MANAGEMENT),
+        @intFromEnum(linux.PR.SET_FP_MODE) => @tagName(linux.PR.SET_FP_MODE),
+        @intFromEnum(linux.PR.GET_FP_MODE) => @tagName(linux.PR.GET_FP_MODE),
+        @intFromEnum(linux.PR.CAP_AMBIENT) => @tagName(linux.PR.CAP_AMBIENT),
+        @intFromEnum(linux.PR.SVE_SET_VL) => @tagName(linux.PR.SVE_SET_VL),
+        @intFromEnum(linux.PR.SVE_GET_VL) => @tagName(linux.PR.SVE_GET_VL),
+        @intFromEnum(linux.PR.GET_SPECULATION_CTRL) => @tagName(linux.PR.GET_SPECULATION_CTRL),
+        @intFromEnum(linux.PR.SET_SPECULATION_CTRL) => @tagName(linux.PR.SET_SPECULATION_CTRL),
+        else => "",
+    };
+}
+
+pub fn capToString(cap: u64) ![]const u8 {
+    if (cap == linux.CAP.AUDIT_CONTROL) return "CAP_AUDIT_CONTROL";
+    if (cap == linux.CAP.AUDIT_READ) return "CAP_AUDIT_READ";
+    if (cap == linux.CAP.AUDIT_WRITE) return "CAP_AUDIT_WRITE";
+    if (cap == linux.CAP.BLOCK_SUSPEND) return "CAP_BLOCK_SUSPEND";
+    if (cap == linux.CAP.BPF) return "CAP_BPF";
+    if (cap == linux.CAP.CHECKPOINT_RESTORE) return "CAP_CHECKPOINT_RESTORE";
+    if (cap == linux.CAP.CHOWN) return "CAP_CHOWN";
+    if (cap == linux.CAP.DAC_OVERRIDE) return "CAP_DAC_OVERRIDE";
+    if (cap == linux.CAP.DAC_READ_SEARCH) return "CAP_DAC_READ_SEARCH";
+    if (cap == linux.CAP.FOWNER) return "CAP_FOWNER";
+    if (cap == linux.CAP.FSETID) return "CAP_FSETID";
+    if (cap == linux.CAP.IPC_LOCK) return "CAP_IPC_LOCK";
+    if (cap == linux.CAP.IPC_OWNER) return "CAP_IPC_OWNER";
+    if (cap == linux.CAP.KILL) return "CAP_KILL";
+    if (cap == linux.CAP.LAST_CAP) return "CAP_LAST_CAP";
+    if (cap == linux.CAP.LEASE) return "CAP_LEASE";
+    if (cap == linux.CAP.LINUX_IMMUTABLE) return "CAP_LINUX_IMMUTABLE";
+    if (cap == linux.CAP.MAC_ADMIN) return "CAP_MAC_ADMIN";
+    if (cap == linux.CAP.MAC_OVERRIDE) return "CAP_MAC_OVERRIDE";
+    if (cap == linux.CAP.MKNOD) return "CAP_MKNOD";
+    if (cap == linux.CAP.NET_ADMIN) return "CAP_NET_ADMIN";
+    if (cap == linux.CAP.NET_BIND_SERVICE) return "CAP_NET_BIND_SERVICE";
+    if (cap == linux.CAP.NET_BROADCAST) return "CAP_NET_BROADCAST";
+    if (cap == linux.CAP.NET_RAW) return "CAP_NET_RAW";
+    if (cap == linux.CAP.PERFMON) return "CAP_PERFMON";
+    if (cap == linux.CAP.SETFCAP) return "CAP_SETFCAP";
+    if (cap == linux.CAP.SETGID) return "CAP_SETGID";
+    if (cap == linux.CAP.SETPCAP) return "CAP_SETPCAP";
+    if (cap == linux.CAP.SETUID) return "CAP_SETUID";
+    if (cap == linux.CAP.SYSLOG) return "CAP_SYSLOG";
+    if (cap == linux.CAP.SYS_ADMIN) return "CAP_SYS_ADMIN";
+    if (cap == linux.CAP.SYS_BOOT) return "CAP_SYS_BOOT";
+    if (cap == linux.CAP.SYS_CHROOT) return "CAP_SYS_CHROOT";
+    if (cap == linux.CAP.SYS_MODULE) return "CAP_SYS_MODULE";
+    if (cap == linux.CAP.SYS_NICE) return "CAP_SYS_NICE";
+    if (cap == linux.CAP.SYS_PACCT) return "CAP_SYS_PACCT";
+    if (cap == linux.CAP.SYS_PTRACE) return "CAP_SYS_PTRACE";
+    if (cap == linux.CAP.SYS_RAWIO) return "CAP_SYS_RAWIO";
+    if (cap == linux.CAP.SYS_RESOURCE) return "CAP_SYS_RESOURCE";
+    if (cap == linux.CAP.SYS_TIME) return "CAP_SYS_TIME";
+    if (cap == linux.CAP.SYS_TTY_CONFIG) return "CAP_SYS_TTY_CONFIG";
+    if (cap == linux.CAP.WAKE_ALARM) return "CAP_WAKE_ALARM";
+    var buff: [2048]u8 = undefined;
+    const cap_str = try std.fmt.bufPrint(&buff, "0x{x} /* CAP_??? */", .{cap});
+    return cap_str;
+}
