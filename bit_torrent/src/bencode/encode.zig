@@ -39,7 +39,7 @@ pub fn encode(alloc: std.mem.Allocator, value: BencodeValue) ![]u8 {
 
 fn encodeValue(v: BencodeValue, encode_buff: *std.ArrayList(u8), alloc: std.mem.Allocator) !void {
     switch (v) {
-        .string => |s| try encodeString(alloc, encode_buff, s),
+        .string => |s| try encode_buff.print(alloc, "{d}:{s}", .{ s.len, s }),
         .integer => |i| try encode_buff.print(alloc, "i{d}e", .{i}),
         .list => |l| {
             try encode_buff.append(alloc, 'l');
@@ -66,7 +66,7 @@ fn encodeValue(v: BencodeValue, encode_buff: *std.ArrayList(u8), alloc: std.mem.
             }.lessThan);
 
             for (keys.items) |key| {
-                try encodeString(alloc, encode_buff, key);
+                try encodeValue(.{ .string = key }, encode_buff, alloc);
                 const value = d.get(key).?;
                 try encodeValue(value, encode_buff, alloc);
             }
@@ -74,10 +74,6 @@ fn encodeValue(v: BencodeValue, encode_buff: *std.ArrayList(u8), alloc: std.mem.
             try encode_buff.append(alloc, 'e');
         },
     }
-}
-
-fn encodeString(alloc: std.mem.Allocator, encode_buff: *std.ArrayList(u8), s: []const u8) !void {
-    try encode_buff.print(alloc, "{d}:{s}", .{ s.len, s });
 }
 
 test "encode string" {
