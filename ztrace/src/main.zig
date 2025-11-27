@@ -1,12 +1,46 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("x86_64-linux-gnu/sys/user.h");
-});
 const syscall = @import("syscallmappings.zig");
 const callargs = @import("syscallargs.zig");
 
 const posix = std.posix;
 const linux = std.os.linux;
+
+const UserRegs = switch (@import("builtin").cpu.arch) {
+    .x86_64 => extern struct {
+        r15: u64,
+        r14: u64,
+        r13: u64,
+        r12: u64,
+        rbp: u64,
+        rbx: u64,
+        r11: u64,
+        r10: u64,
+        r9: u64,
+        r8: u64,
+        rax: u64,
+        rcx: u64,
+        rdx: u64,
+        rsi: u64,
+        rdi: u64,
+        orig_rax: u64,
+        rip: u64,
+        cs: u64,
+        eflags: u64,
+        rsp: u64,
+        ss: u64,
+        fs_base: u64,
+        gs_base: u64,
+        ds: u64,
+        es: u64,
+        fs: u64,
+        gs: u64,
+
+        fn getSysCallArgs(self: UserRegs) [6]u64 {
+            return .{ self.rdi, self.rsi, self.rdx, self.r10, self.r8, self.r9 };
+        }
+    },
+    else => {},
+};
 
 pub fn main() !void {
     var alloc: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
@@ -41,7 +75,7 @@ pub fn main() !void {
             var ret_val: i64 = undefined;
             var in_syscall: bool = false;
             var syscall_args: [6]u64 = undefined;
-            var entry_regs: c.user_regs_struct = undefined;
+            var entry_regs: UserRegs = undefined;
 
             while (true) {
                 _ = linux.ptrace(linux.PTRACE.SYSCALL, pid, 0, 0, 0);
@@ -64,13 +98,13 @@ pub fn main() !void {
                         continue;
                     }
 
-                    var regs: c.user_regs_struct = undefined;
+                    var regs: UserRegs = undefined;
                     if (linux.ptrace(linux.PTRACE.GETREGS, pid, 0, @intFromPtr(&regs), 0) == -1) continue;
 
                     if (!in_syscall) {
                         curr_syscall = @intCast(regs.orig_rax);
                         ret_val = @bitCast(regs.rax);
-                        syscall_args = getSysCallArgs(regs);
+                        syscall_args = regs.getSysCallArgs();
                         entry_regs = regs;
 
                         const syscall_name: []const u8 = syscall.getSysCallName(curr_syscall);
@@ -105,26 +139,4 @@ pub fn main() !void {
             }
         },
     }
-}
-
-fn getSysCallArgs(regs: c.user_regs_struct) [6]u64 {
-    return switch (@import("builtin").cpu.arch) {
-        .x86_64 => [6]u64{
-            regs.rdi,
-            regs.rsi,
-            regs.rdx,
-            regs.r10,
-            regs.r8,
-            regs.r9,
-        },
-        .aarch64 => [6]u64{
-            regs.regs[0],
-            regs.regs[1],
-            regs.regs[2],
-            regs.regs[3],
-            regs.regs[4],
-            regs.regs[5],
-        },
-        else => [6]u64{ 0, 0, 0, 0, 0, 0 },
-    };
 }
