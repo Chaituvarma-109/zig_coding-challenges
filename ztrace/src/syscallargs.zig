@@ -4,12 +4,16 @@ const linux = std.os.linux;
 const syscall = @import("syscallmappings.zig");
 
 pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num: i64) !void {
-    switch (syscall_num) {
-        @intFromEnum(linux.SYS.read) => {
+    const syscall_enum = @tagName(std.enums.fromInt(linux.SYS, syscall_num).?);
+    const sys_enum = std.meta.stringToEnum(linux.SYS, syscall_enum).?;
+
+    // pending: getcwd
+    switch (sys_enum) {
+        linux.SYS.read => {
             // read(fd, buf, count)
             std.debug.print("{d}, 0x{x}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
         },
-        @intFromEnum(linux.SYS.write) => {
+        linux.SYS.write => {
             // write(fd, buf, count)
             std.debug.print("{d}, ", .{rargs[0]});
             if (rargs[1] != 0 and rargs[2] > 0 and rargs[2] < 256) {
@@ -25,7 +29,7 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
                 std.debug.print("0x{x}, {d}", .{ rargs[1], rargs[2] });
             }
         },
-        @intFromEnum(linux.SYS.open) => {
+        linux.SYS.open => {
             // open(pathname, flags, mode)
             if (rargs[0] != 0) {
                 const path: []u8 = readStringFromProcess(gpa, pid, rargs[0]) catch {
@@ -38,7 +42,7 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
                 std.debug.print("0x{x}, {s}", .{ rargs[0], try syscall.openFlagsToString(rargs[1]) });
             }
         },
-        @intFromEnum(linux.SYS.openat) => {
+        linux.SYS.openat => {
             // openat(dirfd, pathname, flags, mode)
             const dirfd: i32 = @truncate(@as(i64, @bitCast(rargs[0])));
             if (dirfd == linux.AT.FDCWD) {
@@ -57,13 +61,13 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
                 std.debug.print("0x{x}, {s}", .{ rargs[1], try syscall.openFlagsToString(rargs[2]) });
             }
         },
-        @intFromEnum(linux.SYS.close) => {
+        linux.SYS.close => {
             // close(fd)
             std.debug.print("{d}", .{@as(i32, @bitCast(@as(u32, @truncate(rargs[0]))))});
         },
-        @intFromEnum(linux.SYS.fstat), @intFromEnum(linux.SYS.stat), @intFromEnum(linux.SYS.lstat) => {
+        linux.SYS.fstat, linux.SYS.stat, linux.SYS.lstat => {
             // fstat(fd, statbuf) / stat(pathname, statbuf) / lstat(pathname, statbuf)
-            if (syscall_num == @intFromEnum(linux.SYS.fstat)) {
+            if (sys_enum == linux.SYS.fstat) {
                 std.debug.print("{d}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1] });
             } else {
                 const path: []u8 = try readStringFromProcess(gpa, pid, rargs[0]);
@@ -71,22 +75,22 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
                 std.debug.print("\"{s}\", 0x{x}", .{ path, rargs[1] });
             }
         },
-        @intFromEnum(linux.SYS.mmap) => {
+        linux.SYS.mmap => {
             // mmap(addr, length, prot, flags, fd, offset)
             var buff: [1024]u8 = undefined;
             const addr_str = if (rargs[0] == 0) "NULL" else try std.fmt.bufPrint(&buff, "0x{x}", .{rargs[0]});
             const z_hex = if (rargs[5] == 0) "0" else try std.fmt.bufPrint(&buff, "0x{x}", .{rargs[0]});
             std.debug.print("{s}, {d}, {s}, {s}, {d}, {s}", .{ addr_str, rargs[1], syscall.mmapProtToString(rargs[2]), syscall.mmapFlagsToString(rargs[3]), @as(i32, @bitCast(@as(u32, @truncate(rargs[4])))), z_hex });
         },
-        @intFromEnum(linux.SYS.mprotect) => {
+        linux.SYS.mprotect => {
             // mprotect(addr, len, prot)
             std.debug.print("0x{x}, {d}, {s}", .{ rargs[0], rargs[1], syscall.mmapProtToString(rargs[2]) });
         },
-        @intFromEnum(linux.SYS.munmap) => {
+        linux.SYS.munmap => {
             // munmap(addr, length)
             std.debug.print("0x{x}, {d}", .{ rargs[0], rargs[1] });
         },
-        @intFromEnum(linux.SYS.brk) => {
+        linux.SYS.brk => {
             // brk(addr)
             if (rargs[0] == 0) {
                 std.debug.print("NULL", .{});
@@ -94,8 +98,8 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
                 std.debug.print("0x{x}", .{rargs[0]});
             }
         },
-        @intFromEnum(linux.SYS.getpid), @intFromEnum(linux.SYS.getuid), @intFromEnum(linux.SYS.getgid), @intFromEnum(linux.SYS.geteuid), @intFromEnum(linux.SYS.getegid), @intFromEnum(linux.SYS.gettid) => {},
-        @intFromEnum(linux.SYS.access) => {
+        linux.SYS.getpid, linux.SYS.getuid, linux.SYS.getgid, linux.SYS.geteuid, linux.SYS.getegid, linux.SYS.gettid => {},
+        linux.SYS.access => {
             // access(pathname, mode)
             if (rargs[0] != 0) {
                 const path: []u8 = readStringFromProcess(gpa, pid, rargs[0]) catch {
@@ -108,7 +112,7 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
                 std.debug.print("0x{x}, {s}", .{ rargs[0], try syscall.accessModeToString(rargs[1]) });
             }
         },
-        @intFromEnum(linux.SYS.faccessat) => {
+        linux.SYS.faccessat => {
             // faccessat(dirfd, pathname, mode, flags)
             const dirfd: i32 = @truncate(@as(i64, @bitCast(rargs[0])));
             if (dirfd == linux.AT.FDCWD) {
@@ -128,7 +132,7 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
                 std.debug.print("0x{x}, {s}, {d}", .{ rargs[1], try syscall.accessModeToString(rargs[2]), rargs[3] });
             }
         },
-        @intFromEnum(linux.SYS.execve) => {
+        linux.SYS.execve => {
             if (rargs[0] != 0) {
                 const path = readStringFromProcess(gpa, pid, rargs[0]) catch {
                     std.debug.print("0x{x}, 0x{x}, 0x{x}", .{ rargs[0], rargs[1], rargs[2] });
@@ -138,53 +142,53 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
                 // Read argv array
                 const argv_str = readArgvArray(gpa, pid, rargs[1]) catch "[...]";
                 defer if (!std.mem.eql(u8, argv_str, "[...]")) gpa.free(argv_str);
-                std.debug.print("\"{s}\", {s}, 0x{x} /* 72 vars */", .{ path, argv_str, rargs[2] });
+                std.debug.print("\"{s}\", {s}, 0x{x} /* {d} vars */", .{ path, argv_str, rargs[2], rargs[3] });
             } else {
                 std.debug.print("0x{x}, 0x{x}, 0x{x}", .{ rargs[0], rargs[1], rargs[2] });
             }
         },
-        @intFromEnum(linux.SYS.getdents64) => {
+        linux.SYS.getdents64 => {
             // getdents64(fd, dirp, count)
             std.debug.print("{d}, 0x{x}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
         },
-        @intFromEnum(linux.SYS.pread64), @intFromEnum(linux.SYS.pwrite64) => {
+        linux.SYS.pread64, linux.SYS.pwrite64 => {
             // pread64(fd, buf, count, offset) / pwrite64(fd, buf, count, offset)
             std.debug.print("{d}, 0x{x}, {d}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2], rargs[3] });
         },
-        @intFromEnum(linux.SYS.ioctl) => {
+        linux.SYS.ioctl => {
             // ioctl(fd, request, ...)
             std.debug.print("{d}, 0x{x}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
         },
-        @intFromEnum(linux.SYS.arch_prctl) => {
+        linux.SYS.arch_prctl => {
             // arch_prctl(option, addr)
             var buff: [1024]u8 = undefined;
             const option = if (rargs[0] == 0x1002) "ARCH_SET_FS" else try std.fmt.bufPrint(&buff, "0x{x}", .{rargs[0]});
             std.debug.print("{s}, 0x{x}", .{ option, rargs[1] });
         },
-        @intFromEnum(linux.SYS.set_tid_address) => {
+        linux.SYS.set_tid_address => {
             // set_tid_address(tidptr)
             std.debug.print("0x{x}", .{rargs[0]});
         },
-        @intFromEnum(linux.SYS.set_robust_list) => {
+        linux.SYS.set_robust_list => {
             // set_robust_list(head, len)
             std.debug.print("0x{x}, {d}", .{ rargs[0], rargs[1] });
         },
-        @intFromEnum(linux.SYS.rseq) => {
+        linux.SYS.rseq => {
             // rseq(rseq, rseq_len, flags, sig)
             std.debug.print("0x{x}, 0x{x}, {d}, 0x{x}", .{ rargs[0], rargs[1], rargs[2], rargs[3] });
         },
-        @intFromEnum(linux.SYS.prlimit64) => {
+        linux.SYS.prlimit64 => {
             // prlimit64(pid, resource, new_limit, old_limit)
             const rlimit = syscall.mapRlimittoString(rargs[1]);
             std.debug.print("{d}, RLIMIT_{s}, 0x{x}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rlimit, rargs[2], rargs[3] });
         },
-        @intFromEnum(linux.SYS.prctl) => {
+        linux.SYS.prctl => {
             // prctl(option, arg2, arg3, arg4, arg5)
             const pr = syscall.mapPrToString(rargs[0]);
             const cap = try syscall.capToString(rargs[1]);
             std.debug.print("PR_{s}, {s}", .{ pr, cap });
         },
-        @intFromEnum(linux.SYS.statfs) => {
+        linux.SYS.statfs => {
             // statfs(path, buf)
             if (rargs[0] != 0) {
                 const path: []u8 = readStringFromProcess(gpa, pid, rargs[0]) catch {
@@ -197,13 +201,13 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
                 std.debug.print("0x{x}, 0x{x}", .{ rargs[0], rargs[1] });
             }
         },
-        @intFromEnum(linux.SYS.getrandom) => {
+        linux.SYS.getrandom => {
             // getrandom(buf, buflen, flags)
             std.debug.print("0x{x}, {d}, GRND_NONBLOCK", .{ rargs[0], rargs[1] });
         },
-        @intFromEnum(linux.SYS.exit_group) => {
+        linux.SYS.exit_group => {
             // exit_group(status)
-            std.debug.print("{d}", .{@as(i32, @bitCast(@as(u32, @truncate(rargs[0]))))});
+            std.debug.print("{d}) = ?", .{@as(i32, @bitCast(@as(u32, @truncate(rargs[0]))))});
         },
         else => {
             // Default: print raw arguments

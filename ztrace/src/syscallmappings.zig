@@ -100,6 +100,9 @@ pub fn mmapFlagsToString(flags: u64) []const u8 {
 
     if (flags & MAP_PRIVATE != 0) {
         if (flags & MAP_ANONYMOUS != 0) {
+            if (flags & MAP_FIXED != 0) {
+                return "MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS";
+            }
             return "MAP_PRIVATE|MAP_ANONYMOUS";
         }
         if (flags & MAP_DENYWRITE != 0) {
