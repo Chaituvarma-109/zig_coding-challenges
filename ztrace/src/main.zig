@@ -49,7 +49,7 @@ pub fn main() !void {
     defer alloc.deinit();
     const gpa: std.mem.Allocator = alloc.allocator();
 
-    const args = try std.process.argsAlloc(gpa);
+    const args: [][:0]u8 = try std.process.argsAlloc(gpa);
 
     std.debug.assert(args.len >= 2);
 
@@ -85,6 +85,7 @@ pub fn main() !void {
             var curr_syscall: i64 = 0;
             var ret_val: i64 = undefined;
             var syscall_args: [6]u64 = undefined;
+            var syscall_name: []const u8 = undefined;
 
             var stats_map: std.AutoHashMap(i64, SyscallStats) = .init(gpa);
             defer stats_map.deinit();
@@ -94,17 +95,14 @@ pub fn main() !void {
                 _ = linux.ptrace(linux.PTRACE.SYSCALL, pid, 0, 0, 0);
                 _ = linux.waitpid(pid, &status, 0);
 
-                if (linux.W.IFEXITED(status)) break;
-                if (linux.W.IFSIGNALED(status)) break;
+                if (linux.W.IFEXITED(status) or linux.W.IFSIGNALED(status)) break;
 
                 if (linux.W.IFSTOPPED(status)) {
                     const sig: u32 = linux.W.STOPSIG(status);
 
                     const t: u32 = @intCast(@intFromEnum(linux.SIG.TRAP) | 0x80);
 
-                    if (sig != @intFromEnum(linux.SIG.TRAP) and sig != t) {
-                        _ = linux.ptrace(linux.PTRACE.CONT, pid, 0, @intCast(sig), 0);
-                    }
+                    if (sig != @intFromEnum(linux.SIG.TRAP) and sig != t) _ = linux.ptrace(linux.PTRACE.CONT, pid, 0, @intCast(sig), 0);
 
                     const syscall_info: *ptrace_syscall_info = try gpa.create(ptrace_syscall_info);
                     defer gpa.destroy(syscall_info);
@@ -117,8 +115,8 @@ pub fn main() !void {
                         entry_time = try .now();
 
                         if (!print_stat) {
-                            const syscall_name: []const u8 = syscall.getSysCallName(curr_syscall);
-                            std.debug.print("[{s}] (", .{syscall_name});
+                            syscall_name = syscall.getSysCallName(curr_syscall);
+                            std.debug.print("[\x1b[33m{s}\x1b[0m] (", .{syscall_name});
                             try callargs.printSysArgs(gpa, pid, syscall_args, curr_syscall);
                         }
                     } else if (syscall_info.isExit()) {
@@ -131,9 +129,7 @@ pub fn main() !void {
                         var stats: SyscallStats = stats_map.get(curr_syscall) orelse .{};
                         stats.calls += 1;
                         stats.total_time +%= duration;
-                        if (ret_val < 0 and ret_val > -4096) {
-                            stats.errors += 1;
-                        }
+                        if (ret_val < 0 and ret_val > -4096) stats.errors += 1;
                         try stats_map.put(curr_syscall, stats);
 
                         if (!print_stat) {
@@ -143,27 +139,25 @@ pub fn main() !void {
                             if (ret_val < 0 and ret_val > -4096) {
                                 if (err_name.len > 0) {
                                     if (err_desc.len > 0) {
-                                        std.debug.print(") = {d} {s} ({s})\n", .{ ret_val, err_name, err_desc });
+                                        std.debug.print(") \x1b[100m=\x1b[0m \x1b[31m{d} {s} ({s})\x1b[0m\n", .{ ret_val, err_name, err_desc });
                                     } else {
-                                        std.debug.print(") = {d} {s}\n", .{ ret_val, err_name });
+                                        std.debug.print(") \x1b[100m=\x1b[0m \x1b[31m{d} {s}\x1b[0m\n", .{ ret_val, err_name });
                                     }
                                 } else {
-                                    std.debug.print(") = {d}\n", .{ret_val});
+                                    std.debug.print(") \x1b[100m=\x1b[0m \x1b[31m{d}\x1b[0m\n", .{ret_val});
                                 }
                             } else {
                                 if (curr_syscall == @intFromEnum(linux.SYS.mmap) or curr_syscall == @intFromEnum(linux.SYS.brk)) {
-                                    std.debug.print(") = 0x{x}\n", .{@as(u64, @bitCast(ret_val))});
+                                    std.debug.print(") \x1b[100m=\x1b[0m \x1b[35m0x{x}\x1b[0m\n", .{@as(u64, @bitCast(ret_val))});
                                 } else {
-                                    std.debug.print(") = {d}\n", .{ret_val});
+                                    std.debug.print(") \x1b[100m=\x1b[0m \x1b[92m{d}\x1b[0m\n", .{ret_val});
                                 }
                             }
                         }
                     }
                 }
             }
-            if (print_stat) {
-                try displaystat(gpa, &stats_map);
-            }
+            if (print_stat) try displaystat(gpa, &stats_map);
         },
     }
 }
@@ -193,8 +187,10 @@ fn displaystat(gpa: std.mem.Allocator, stats_map: *std.AutoHashMap(i64, SyscallS
     }.lessThan);
 
     // Print header
-    std.debug.print("% time     seconds  usecs/call     calls    errors syscall\n", .{});
-    std.debug.print("------ ----------- ----------- --------- --------- ----------------\n", .{});
+    std.debug.print("\n", .{});
+    std.debug.print("\x1b[33m------ ----------- ----------- --------- --------- ----------------\x1b[0m\n", .{});
+    std.debug.print("\x1b[33m% time     seconds  usecs/call     calls    errors syscall\x1b[0m\n", .{});
+    std.debug.print("\x1b[33m------ ----------- ----------- --------- --------- ----------------\x1b[0m\n", .{});
 
     // Print each syscall
     for (entries.items) |entry| {
@@ -224,12 +220,13 @@ fn displaystat(gpa: std.mem.Allocator, stats_map: *std.AutoHashMap(i64, SyscallS
     }
 
     // Print footer
-    std.debug.print("------ ----------- ----------- --------- --------- ----------------\n", .{});
+    std.debug.print("\x1b[33m------ ----------- ----------- --------- --------- ----------------\x1b[0m\n", .{});
     const total_seconds: f64 = @as(f64, @floatFromInt(total_time)) / 1_000_000_000.0;
     const total_usecs_per_call: u64 = if (total_calls > 0) total_time / (total_calls * 1000) else 0;
     if (total_errors > 0) {
-        std.debug.print("100.00 {d:11.6} {d:11} {d:9} {d:9} total\n", .{ total_seconds, total_usecs_per_call, total_calls, total_errors });
+        std.debug.print("\x1b[36m100.00 {d:11.6} {d:11} {d:9} {d:9} total\x1b[0m\n", .{ total_seconds, total_usecs_per_call, total_calls, total_errors });
     } else {
-        std.debug.print("100.00 {d:11.6} {d:11} {d:9}           total\n", .{ total_seconds, total_usecs_per_call, total_calls });
+        std.debug.print("\x1b[36m100.00 {d:11.6} {d:11} {d:9}           total\x1b[0m\n", .{ total_seconds, total_usecs_per_call, total_calls });
     }
+    std.debug.print("\x1b[33m------ ----------- ----------- --------- --------- ----------------\x1b[0m\n", .{});
 }
