@@ -7,7 +7,7 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
     const syscall_enum = @tagName(std.enums.fromInt(linux.SYS, syscall_num).?);
     const sys_enum = std.meta.stringToEnum(linux.SYS, syscall_enum).?;
 
-    // pending: getcwd
+    // pending: getcwd, newfstatat, fstatat64, rt_sigaction, fcntl, faccessat2
     switch (sys_enum) {
         linux.SYS.read => {
             // read(fd, buf, count)
@@ -207,7 +207,8 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
         },
         linux.SYS.exit_group => {
             // exit_group(status)
-            std.debug.print("{d}) = ?", .{@as(i32, @bitCast(@as(u32, @truncate(rargs[0]))))});
+            const exit_code = @as(i32, @bitCast(@as(u32, @truncate(rargs[0]))));
+            std.debug.print("{d}) = ?\n++ exited with {d} ++\n", .{ exit_code, exit_code });
         },
         else => {
             // Default: print raw arguments
