@@ -11,7 +11,6 @@ pub fn main() !void {
     var file_name: ?[]const u8 = null;
 
     var args = std.process.args();
-
     _ = args.skip();
 
     while (args.next()) |arg| {
@@ -29,43 +28,33 @@ pub fn main() !void {
             return;
         };
     }
-    _ = std.os.linux.fadvise(fd, 0, 0, std.os.linux.POSIX_FADV.SEQUENTIAL);
-    _ = std.os.linux.fadvise(fd, 0, 0, std.os.linux.POSIX_FADV.NOREUSE);
     defer if (file_name != null) std.posix.close(fd);
 
     const stat = try std.posix.fstat(fd);
     const is_regular: bool = (stat.mode & std.posix.S.IFMT) == std.posix.S.IFREG;
 
-    if (is_regular) {
-        const size: usize = @intCast(stat.size);
-        if (size > 0) {
-            const chunk_size = 128 * 1024 * 1024;
-            var offset: usize = 0;
+    if (is_regular) _ = std.os.linux.fadvise(fd, 0, 0, std.os.linux.POSIX_FADV.SEQUENTIAL);
 
-            while (offset < size) {
-                const to_map: usize = @min(chunk_size, size - offset);
-                const flags: std.posix.MAP = .{ .TYPE = .PRIVATE };
+    var buff: [256 * 1024]u8 = undefined;
 
-                const data: []u8 = try std.posix.mmap(null, to_map, std.posix.PROT.READ, flags, fd, offset);
-                defer std.posix.munmap(data);
+    while (true) {
+        const n: usize = try std.posix.read(fd, &buff);
+        if (n == 0) break;
 
-                const slice: []const u8 = data[0..to_map];
-                bytes = slice.len;
+        const data: []const u8 = buff[0..n];
+        bytes += data.len;
 
-                try count(slice, bytes);
+        for (data) |char| {
+            if ((char <= 0x7f) or (char >= 0xc0 and char <= 0xf7)) chars += 1;
 
-                offset += to_map;
+            if (char == '\n') lines += 1;
+
+            if (std.ascii.isWhitespace(char)) {
+                if (in_word) in_word = false;
+            } else {
+                in_word = true;
+                words += 1;
             }
-
-            _ = std.os.linux.fadvise(fd, 0, 0, std.os.linux.POSIX_FADV.DONTNEED);
-        }
-    } else {
-        var buff: [65536]u8 = undefined;
-        while (true) {
-            const n: usize = try std.posix.read(fd, &buff);
-            if (n == 0) break;
-            bytes += n;
-            try count(&buff, n);
         }
     }
 
@@ -81,22 +70,5 @@ pub fn main() !void {
                 std.debug.print("{d} {d} {d}\n", .{ lines, words, bytes });
             }
         },
-    }
-}
-
-fn count(buff: []u8, n: usize) !void {
-    const data: []const u8 = buff[0..n];
-
-    for (data) |char| {
-        if ((char <= 0x7f) or (char >= 0xc0 and char <= 0xf7)) chars += 1;
-
-        if (char == '\n') lines += 1;
-
-        if (std.ascii.isWhitespace(char)) {
-            if (in_word) in_word = false;
-        } else {
-            in_word = true;
-            words += 1;
-        }
     }
 }
