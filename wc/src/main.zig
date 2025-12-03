@@ -29,6 +29,8 @@ pub fn main() !void {
             return;
         };
     }
+    _ = std.os.linux.fadvise(fd, 0, 0, std.os.linux.POSIX_FADV.SEQUENTIAL);
+    _ = std.os.linux.fadvise(fd, 0, 0, std.os.linux.POSIX_FADV.NOREUSE);
     defer if (file_name != null) std.posix.close(fd);
 
     const stat = try std.posix.fstat(fd);
@@ -39,7 +41,10 @@ pub fn main() !void {
         if (size > 0) {
             const flags: std.posix.MAP = .{ .TYPE = .PRIVATE };
             const data = try std.posix.mmap(null, size, std.posix.PROT.READ, flags, fd, 0);
-            defer std.posix.munmap(data);
+            defer {
+            std.posix.munmap(data);
+            _ = std.os.linux.fadvise(fd, 0, 0, std.os.linux.POSIX_FADV.DONTNEED);
+            }
 
             bytes = size;
 
