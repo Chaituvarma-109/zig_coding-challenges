@@ -26,27 +26,23 @@ const Wc = struct {
     words: usize = 0,
     chars: usize = 0,
     bytes: usize = 0,
+    fd: std.os.linux.fd_t = std.os.linux.STDIN_FILENO,
 
     fn count(config: Config) !Wc {
         var wc = Wc{};
         var in_word: bool = false;
-        var fd: std.posix.fd_t = std.posix.STDIN_FILENO;
 
         if (config.filename) |f_name| {
-            fd = try std.posix.open(f_name, .{ .ACCMODE = .RDONLY }, 0);
+            const file_name: [*:0]const u8 = @ptrCast(f_name);
+            wc.fd = @intCast(std.os.linux.open(file_name, .{ .ACCMODE = .RDONLY }, 0));
         }
-        defer if (config.filename != null) std.posix.close(fd);
+        defer _ = std.os.linux.close(wc.fd);
 
-        const stat = try std.posix.fstat(fd);
-        const is_regular: bool = (stat.mode & std.posix.S.IFMT) == std.posix.S.IFREG;
-
-        if (is_regular) {
-            _ = std.os.linux.fadvise(fd, 0, 0, std.os.linux.POSIX_FADV.SEQUENTIAL);
-        }
-        var buff: [256 * 1024]u8 = undefined;
+        _ = std.os.linux.fadvise(wc.fd, 0, 0, std.os.linux.POSIX_FADV.SEQUENTIAL);
+        var buff: [512 * 1024]u8 = undefined;
 
         while (true) {
-            const n: usize = try std.posix.read(fd, &buff);
+            const n: usize = std.os.linux.read(wc.fd, &buff, buff.len);
             if (n == 0) break;
 
             const data: []const u8 = buff[0..n];
@@ -71,28 +67,33 @@ const Wc = struct {
     }
 };
 
+// FIX: print at 92.
 pub fn main() !void {
     const config: Config = try .init();
 
     const count: Wc = try .count(config);
     const options: ?[]const u8 = config.options;
 
+    var wr = std.fs.File.Writer.initInterface(&.{});
+
     if (options) |opts| {
         for (opts) |opt| {
             switch (opt) {
-                'c' => std.debug.print("{d} ", .{count.bytes}),
-                'l' => std.debug.print("{d} ", .{count.lines}),
-                'w' => std.debug.print("{d} ", .{count.words}),
-                'm' => std.debug.print("{d} ", .{count.chars}),
+                'c' => try wr.print("{d} ", .{count.bytes}),
+                'l' => try wr.print("{d} ", .{count.lines}),
+                'w' => try wr.print("{d} ", .{count.words}),
+                'm' => try wr.print("{d} ", .{count.chars}),
                 else => {},
             }
         }
-        std.debug.print("{s}\n", .{config.filename.?});
+        try wr.print("{s}\n", .{config.filename.?});
     } else {
         if (config.filename) |f_name| {
-            std.debug.print("{d} {d} {d} {s}\n", .{ count.lines, count.words, count.bytes, f_name });
+            try wr.print("{d} {d} {d} {s}\n", .{ count.lines, count.words, count.bytes, f_name });
         } else {
-            std.debug.print("{d} {d} {d}\n", .{ count.lines, count.words, count.bytes });
+            try wr.print("{d} {d} {d}\n", .{ count.lines, count.words, count.bytes });
         }
     }
+
+    try wr.flush();
 }
