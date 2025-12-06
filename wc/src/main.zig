@@ -1,23 +1,44 @@
 const std = @import("std");
 
 const Config = struct {
-    options: ?[]const u8 = null,
+    show_lines: bool = false,
+    show_words: bool = false,
+    show_chars: bool = false,
+    show_bytes: bool = false,
     filename: ?[]const u8 = null,
 
     fn init() !Config {
+        var config = Config{};
         var args = std.process.args();
         _ = args.skip();
-        var cliargs = Config{};
+
+        var has_options = false;
 
         while (args.next()) |arg| {
-            if (arg.len >= 2 and std.mem.startsWith(u8, arg, "-")) {
-                cliargs.options = arg[1..arg.len];
+            if (arg.len >= 2 and arg[0] == '-') {
+                has_options = true;
+                for (arg[1..]) |opt| {
+                    switch (opt) {
+                        'l' => config.show_lines = true,
+                        'w' => config.show_words = true,
+                        'c' => config.show_bytes = true,
+                        'm' => config.show_chars = true,
+                        else => {},
+                    }
+                }
             } else {
-                cliargs.filename = arg;
+                config.filename = arg;
             }
         }
 
-        return cliargs;
+        // If no options specified, default to -lwc
+        if (!has_options) {
+            config.show_lines = true;
+            config.show_words = true;
+            config.show_bytes = true;
+        }
+
+        return config;
     }
 };
 
@@ -49,17 +70,16 @@ const Wc = struct {
             wc.bytes += data.len;
 
             for (data) |char| {
-                if ((char <= 0x7f) or (char >= 0xc0 and char <= 0xf7)) wc.chars += 1;
+                if ((char & 0xc0) != 0x80) wc.chars += 1;
 
                 if (char == '\n') wc.lines += 1;
 
-                if (std.ascii.isWhitespace(char)) {
-                    if (in_word) in_word = false;
-                } else {
-                    if (!in_word) {
-                        in_word = true;
-                        wc.words += 1;
-                    }
+                const ws = std.ascii.isWhitespace(char);
+                if (!ws and !in_word) {
+                    wc.words += 1;
+                    in_word = true;
+                } else if (ws) {
+                    in_word = false;
                 }
             }
         }
@@ -67,33 +87,24 @@ const Wc = struct {
     }
 };
 
-// FIX: print at 92.
 pub fn main() !void {
-    const config: Config = try .init();
+    const config = try Config.init();
+    const count = try Wc.count(config);
 
-    const count: Wc = try .count(config);
-    const options: ?[]const u8 = config.options;
+    var wbuff: [256]u8 = undefined;
+    const file = std.fs.File.stdout();
+    var fw = file.writer(&wbuff);
+    const wr = &fw.interface;
 
-    var wr = std.fs.File.Writer.initInterface(&.{});
+    if (config.show_lines) try wr.print("{d} ", .{count.lines});
+    if (config.show_words) try wr.print("{d} ", .{count.words});
+    if (config.show_chars) try wr.print("{d} ", .{count.chars});
+    if (config.show_bytes) try wr.print("{d} ", .{count.bytes});
 
-    if (options) |opts| {
-        for (opts) |opt| {
-            switch (opt) {
-                'c' => try wr.print("{d} ", .{count.bytes}),
-                'l' => try wr.print("{d} ", .{count.lines}),
-                'w' => try wr.print("{d} ", .{count.words}),
-                'm' => try wr.print("{d} ", .{count.chars}),
-                else => {},
-            }
-        }
-        try wr.print("{s}\n", .{config.filename.?});
+    if (config.filename) |f| {
+        try wr.print("{s}\n", .{f});
     } else {
-        if (config.filename) |f_name| {
-            try wr.print("{d} {d} {d} {s}\n", .{ count.lines, count.words, count.bytes, f_name });
-        } else {
-            try wr.print("{d} {d} {d}\n", .{ count.lines, count.words, count.bytes });
-        }
+        try wr.print("\n", .{});
     }
-
     try wr.flush();
 }
