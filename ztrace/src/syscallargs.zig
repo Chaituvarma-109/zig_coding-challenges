@@ -3,7 +3,7 @@ const std = @import("std");
 const linux = std.os.linux;
 const syscall = @import("syscallmappings.zig");
 
-pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num: i64) !void {
+pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num: i64, wr: *std.Io.Writer) !void {
     const syscall_enum = @tagName(std.enums.fromInt(linux.SYS, syscall_num).?);
     const sys_enum = std.meta.stringToEnum(linux.SYS, syscall_enum).?;
 
@@ -11,208 +11,242 @@ pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num
     switch (sys_enum) {
         linux.SYS.read => {
             // read(fd, buf, count)
-            std.debug.print("{d}, 0x{x}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
+            try wr.print("{d}, 0x{x}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
+            try wr.flush();
         },
         linux.SYS.write => {
             // write(fd, buf, count)
-            std.debug.print("{d}, ", .{rargs[0]});
+            try wr.print("{d}, ", .{rargs[0]});
             if (rargs[1] != 0 and rargs[2] > 0 and rargs[2] < 256) {
-                const str = readMemoryFromProcess(gpa, pid, rargs[1], @intCast(rargs[2])) catch {
-                    std.debug.print("0x{x}, {d}", .{ rargs[1], rargs[2] });
+                const str: []u8 = readMemoryFromProcess(gpa, pid, rargs[1], @intCast(rargs[2])) catch {
+                    try wr.print("0x{x}, {d}", .{ rargs[1], rargs[2] });
+                    try wr.flush();
                     return;
                 };
                 defer gpa.free(str);
-                std.debug.print("\"", .{});
-                try printEscapedString(str);
-                std.debug.print("\", {d}", .{rargs[2]});
+                try wr.print("\"", .{});
+                try printEscapedString(str, wr);
+                try wr.print("\", {d}", .{rargs[2]});
+                try wr.flush();
             } else {
-                std.debug.print("0x{x}, {d}", .{ rargs[1], rargs[2] });
+                try wr.print("0x{x}, {d}", .{ rargs[1], rargs[2] });
+                try wr.flush();
             }
         },
         linux.SYS.open => {
             // open(pathname, flags, mode)
             if (rargs[0] != 0) {
                 const path: []u8 = readStringFromProcess(gpa, pid, rargs[0]) catch {
-                    std.debug.print("0x{x}, {s}", .{ rargs[0], try syscall.openFlagsToString(rargs[1]) });
+                    try wr.print("0x{x}, {s}", .{ rargs[0], try syscall.openFlagsToString(rargs[1]) });
+                    try wr.flush();
                     return;
                 };
                 defer gpa.free(path);
-                std.debug.print("\"{s}\", {s}", .{ path, try syscall.openFlagsToString(rargs[1]) });
+                try wr.print("\"{s}\", {s}", .{ path, try syscall.openFlagsToString(rargs[1]) });
             } else {
-                std.debug.print("0x{x}, {s}", .{ rargs[0], try syscall.openFlagsToString(rargs[1]) });
+                try wr.print("0x{x}, {s}", .{ rargs[0], try syscall.openFlagsToString(rargs[1]) });
             }
+            try wr.flush();
         },
         linux.SYS.openat => {
             // openat(dirfd, pathname, flags, mode)
             const dirfd: i32 = @truncate(@as(i64, @bitCast(rargs[0])));
             if (dirfd == linux.AT.FDCWD) {
-                std.debug.print("AT_FDCWD, ", .{});
+                try wr.print("AT_FDCWD, ", .{});
             } else {
-                std.debug.print("{d}, ", .{dirfd});
+                try wr.print("{d}, ", .{dirfd});
             }
             if (rargs[1] != 0) {
                 const path: []u8 = readStringFromProcess(gpa, pid, rargs[1]) catch {
-                    std.debug.print("0x{x}, {s}", .{ rargs[1], try syscall.openFlagsToString(rargs[2]) });
+                    try wr.print("0x{x}, {s}", .{ rargs[1], try syscall.openFlagsToString(rargs[2]) });
+                    try wr.flush();
                     return;
                 };
                 defer gpa.free(path);
-                std.debug.print("\"{s}\", {s}", .{ path, try syscall.openFlagsToString(rargs[2]) });
+                try wr.print("\"{s}\", {s}", .{ path, try syscall.openFlagsToString(rargs[2]) });
             } else {
-                std.debug.print("0x{x}, {s}", .{ rargs[1], try syscall.openFlagsToString(rargs[2]) });
+                try wr.print("0x{x}, {s}", .{ rargs[1], try syscall.openFlagsToString(rargs[2]) });
             }
+            try wr.flush();
         },
         linux.SYS.close => {
             // close(fd)
-            std.debug.print("{d}", .{@as(i32, @bitCast(@as(u32, @truncate(rargs[0]))))});
+            try wr.print("{d}", .{@as(i32, @bitCast(@as(u32, @truncate(rargs[0]))))});
+            try wr.flush();
         },
         linux.SYS.fstat, linux.SYS.stat, linux.SYS.lstat => {
             // fstat(fd, statbuf) / stat(pathname, statbuf) / lstat(pathname, statbuf)
             if (sys_enum == linux.SYS.fstat) {
-                std.debug.print("{d}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1] });
+                try wr.print("{d}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1] });
             } else {
                 const path: []u8 = try readStringFromProcess(gpa, pid, rargs[0]);
                 defer gpa.free(path);
-                std.debug.print("\"{s}\", 0x{x}", .{ path, rargs[1] });
+                try wr.print("\"{s}\", 0x{x}", .{ path, rargs[1] });
             }
+            try wr.flush();
         },
         linux.SYS.mmap => {
             // mmap(addr, length, prot, flags, fd, offset)
             var buff: [1024]u8 = undefined;
             const addr_str = if (rargs[0] == 0) "NULL" else try std.fmt.bufPrint(&buff, "0x{x}", .{rargs[0]});
             const z_hex = if (rargs[5] == 0) "0" else try std.fmt.bufPrint(&buff, "0x{x}", .{rargs[0]});
-            std.debug.print("{s}, {d}, {s}, {s}, {d}, {s}", .{ addr_str, rargs[1], syscall.mmapProtToString(rargs[2]), syscall.mmapFlagsToString(rargs[3]), @as(i32, @bitCast(@as(u32, @truncate(rargs[4])))), z_hex });
+            try wr.print("{s}, {d}, {s}, {s}, {d}, {s}", .{ addr_str, rargs[1], syscall.mmapProtToString(rargs[2]), syscall.mmapFlagsToString(rargs[3]), @as(i32, @bitCast(@as(u32, @truncate(rargs[4])))), z_hex });
+            try wr.flush();
         },
         linux.SYS.mprotect => {
             // mprotect(addr, len, prot)
-            std.debug.print("0x{x}, {d}, {s}", .{ rargs[0], rargs[1], syscall.mmapProtToString(rargs[2]) });
+            try wr.print("0x{x}, {d}, {s}", .{ rargs[0], rargs[1], syscall.mmapProtToString(rargs[2]) });
+            try wr.flush();
         },
         linux.SYS.munmap => {
             // munmap(addr, length)
-            std.debug.print("0x{x}, {d}", .{ rargs[0], rargs[1] });
+            try wr.print("0x{x}, {d}", .{ rargs[0], rargs[1] });
+            try wr.flush();
         },
         linux.SYS.brk => {
             // brk(addr)
             if (rargs[0] == 0) {
-                std.debug.print("NULL", .{});
+                try wr.print("NULL", .{});
             } else {
-                std.debug.print("0x{x}", .{rargs[0]});
+                try wr.print("0x{x}", .{rargs[0]});
             }
+            try wr.flush();
         },
         linux.SYS.getpid, linux.SYS.getuid, linux.SYS.getgid, linux.SYS.geteuid, linux.SYS.getegid, linux.SYS.gettid => {},
         linux.SYS.access => {
             // access(pathname, mode)
             if (rargs[0] != 0) {
                 const path: []u8 = readStringFromProcess(gpa, pid, rargs[0]) catch {
-                    std.debug.print("0x{x}, {s}", .{ rargs[0], try syscall.accessModeToString(rargs[1]) });
+                    try wr.print("0x{x}, {s}", .{ rargs[0], try syscall.accessModeToString(rargs[1]) });
+                    try wr.flush();
                     return;
                 };
                 defer gpa.free(path);
-                std.debug.print("\"{s}\", {s}", .{ path, try syscall.accessModeToString(rargs[1]) });
+                try wr.print("\"{s}\", {s}", .{ path, try syscall.accessModeToString(rargs[1]) });
             } else {
-                std.debug.print("0x{x}, {s}", .{ rargs[0], try syscall.accessModeToString(rargs[1]) });
+                try wr.print("0x{x}, {s}", .{ rargs[0], try syscall.accessModeToString(rargs[1]) });
             }
+            try wr.flush();
         },
         linux.SYS.faccessat => {
             // faccessat(dirfd, pathname, mode, flags)
             const dirfd: i32 = @truncate(@as(i64, @bitCast(rargs[0])));
             if (dirfd == linux.AT.FDCWD) {
-                std.debug.print("AT_FDCWD, ", .{});
+                try wr.print("AT_FDCWD, ", .{});
             } else {
-                std.debug.print("{d}, ", .{dirfd});
+                try wr.print("{d}, ", .{dirfd});
             }
             if (rargs[1] != 0) {
                 // for see linux.AT
                 const path: []u8 = readStringFromProcess(gpa, pid, rargs[1]) catch {
-                    std.debug.print("0x{x}, {s}, {d}", .{ rargs[1], try syscall.accessModeToString(rargs[2]), rargs[3] });
+                    try wr.print("0x{x}, {s}, {d}", .{ rargs[1], try syscall.accessModeToString(rargs[2]), rargs[3] });
+                    try wr.flush();
                     return;
                 };
                 defer gpa.free(path);
-                std.debug.print("\"{s}\", {s}, {d}", .{ path, try syscall.accessModeToString(rargs[2]), rargs[3] });
+                try wr.print("\"{s}\", {s}, {d}", .{ path, try syscall.accessModeToString(rargs[2]), rargs[3] });
             } else {
-                std.debug.print("0x{x}, {s}, {d}", .{ rargs[1], try syscall.accessModeToString(rargs[2]), rargs[3] });
+                try wr.print("0x{x}, {s}, {d}", .{ rargs[1], try syscall.accessModeToString(rargs[2]), rargs[3] });
             }
+            try wr.flush();
         },
         linux.SYS.execve => {
             if (rargs[0] != 0) {
-                const path = readStringFromProcess(gpa, pid, rargs[0]) catch {
-                    std.debug.print("0x{x}, 0x{x}, 0x{x}", .{ rargs[0], rargs[1], rargs[2] });
+                const path: []u8 = readStringFromProcess(gpa, pid, rargs[0]) catch {
+                    try wr.print("0x{x}, 0x{x}, 0x{x}", .{ rargs[0], rargs[1], rargs[2] });
+                    try wr.flush();
                     return;
                 };
                 defer gpa.free(path);
                 // Read argv array
                 const argv_str = readArgvArray(gpa, pid, rargs[1]) catch "[...]";
                 defer if (!std.mem.eql(u8, argv_str, "[...]")) gpa.free(argv_str);
-                std.debug.print("\"{s}\", {s}, 0x{x} /* {d} vars */", .{ path, argv_str, rargs[2], rargs[3] });
+                try wr.print("\"{s}\", {s}, 0x{x} /* {d} vars */", .{ path, argv_str, rargs[2], rargs[3] });
             } else {
-                std.debug.print("0x{x}, 0x{x}, 0x{x}", .{ rargs[0], rargs[1], rargs[2] });
+                try wr.print("0x{x}, 0x{x}, 0x{x}", .{ rargs[0], rargs[1], rargs[2] });
             }
+            try wr.flush();
         },
         linux.SYS.getdents64 => {
             // getdents64(fd, dirp, count)
-            std.debug.print("{d}, 0x{x}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
+            try wr.print("{d}, 0x{x}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
+            try wr.flush();
         },
         linux.SYS.pread64, linux.SYS.pwrite64 => {
             // pread64(fd, buf, count, offset) / pwrite64(fd, buf, count, offset)
-            std.debug.print("{d}, 0x{x}, {d}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2], rargs[3] });
+            try wr.print("{d}, 0x{x}, {d}, {d}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2], rargs[3] });
+            try wr.flush();
         },
         linux.SYS.ioctl => {
             // ioctl(fd, request, ...)
-            std.debug.print("{d}, 0x{x}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
+            try wr.print("{d}, 0x{x}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rargs[1], rargs[2] });
+            try wr.flush();
         },
         linux.SYS.arch_prctl => {
             // arch_prctl(option, addr)
             var buff: [1024]u8 = undefined;
             const option = if (rargs[0] == 0x1002) "ARCH_SET_FS" else try std.fmt.bufPrint(&buff, "0x{x}", .{rargs[0]});
-            std.debug.print("{s}, 0x{x}", .{ option, rargs[1] });
+            try wr.print("{s}, 0x{x}", .{ option, rargs[1] });
+            try wr.flush();
         },
         linux.SYS.set_tid_address => {
             // set_tid_address(tidptr)
-            std.debug.print("0x{x}", .{rargs[0]});
+            try wr.print("0x{x}", .{rargs[0]});
+            try wr.flush();
         },
         linux.SYS.set_robust_list => {
             // set_robust_list(head, len)
-            std.debug.print("0x{x}, {d}", .{ rargs[0], rargs[1] });
+            try wr.print("0x{x}, {d}", .{ rargs[0], rargs[1] });
+            try wr.flush();
         },
         linux.SYS.rseq => {
             // rseq(rseq, rseq_len, flags, sig)
-            std.debug.print("0x{x}, 0x{x}, {d}, 0x{x}", .{ rargs[0], rargs[1], rargs[2], rargs[3] });
+            try wr.print("0x{x}, 0x{x}, {d}, 0x{x}", .{ rargs[0], rargs[1], rargs[2], rargs[3] });
+            try wr.flush();
         },
         linux.SYS.prlimit64 => {
             // prlimit64(pid, resource, new_limit, old_limit)
             const rlimit = syscall.mapRlimittoString(rargs[1]);
-            std.debug.print("{d}, RLIMIT_{s}, 0x{x}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rlimit, rargs[2], rargs[3] });
+            try wr.print("{d}, RLIMIT_{s}, 0x{x}, 0x{x}", .{ @as(i32, @bitCast(@as(u32, @truncate(rargs[0])))), rlimit, rargs[2], rargs[3] });
+            try wr.flush();
         },
         linux.SYS.prctl => {
             // prctl(option, arg2, arg3, arg4, arg5)
             const pr = syscall.mapPrToString(rargs[0]);
             const cap = try syscall.capToString(rargs[1]);
-            std.debug.print("PR_{s}, {s}", .{ pr, cap });
+            try wr.print("PR_{s}, {s}", .{ pr, cap });
+            try wr.flush();
         },
         linux.SYS.statfs => {
             // statfs(path, buf)
             if (rargs[0] != 0) {
                 const path: []u8 = readStringFromProcess(gpa, pid, rargs[0]) catch {
-                    std.debug.print("0x{x}, 0x{x}", .{ rargs[0], rargs[1] });
+                    try wr.print("0x{x}, 0x{x}", .{ rargs[0], rargs[1] });
+                    try wr.flush();
                     return;
                 };
                 defer gpa.free(path);
-                std.debug.print("\"{s}\", 0x{x}", .{ path, rargs[1] });
+                try wr.print("\"{s}\", 0x{x}", .{ path, rargs[1] });
             } else {
-                std.debug.print("0x{x}, 0x{x}", .{ rargs[0], rargs[1] });
+                try wr.print("0x{x}, 0x{x}", .{ rargs[0], rargs[1] });
             }
+            try wr.flush();
         },
         linux.SYS.getrandom => {
             // getrandom(buf, buflen, flags)
-            std.debug.print("0x{x}, {d}, GRND_NONBLOCK", .{ rargs[0], rargs[1] });
+            try wr.print("0x{x}, {d}, GRND_NONBLOCK", .{ rargs[0], rargs[1] });
+            try wr.flush();
         },
         linux.SYS.exit_group => {
             // exit_group(status)
             const exit_code = @as(i32, @bitCast(@as(u32, @truncate(rargs[0]))));
-            std.debug.print("{d}) = ?\n++ exited with {d} ++\n", .{ exit_code, exit_code });
+            try wr.print("{d}) = ?\n++ exited with {d} ++\n", .{ exit_code, exit_code });
+            try wr.flush();
         },
         else => {
             // Default: print raw arguments
-            std.debug.print("0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x}", .{ rargs[0], rargs[1], rargs[2], rargs[3], rargs[4], rargs[5] });
+            try wr.print("0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x}", .{ rargs[0], rargs[1], rargs[2], rargs[3], rargs[4], rargs[5] });
+            try wr.flush();
         },
     }
 }
@@ -353,18 +387,19 @@ fn readMemoryFromProcess(allocator: std.mem.Allocator, pid: i32, addr: u64, len:
     return result;
 }
 
-fn printEscapedString(str: []const u8) !void {
+fn printEscapedString(str: []const u8, wr: *std.Io.Writer) !void {
     for (str) |ch| {
         switch (ch) {
-            '\n' => std.debug.print("\\n", .{}),
-            '\r' => std.debug.print("\\r", .{}),
-            '\t' => std.debug.print("\\t", .{}),
-            '\\' => std.debug.print("\\\\", .{}),
-            '"' => std.debug.print("\\\"", .{}),
-            0x20...0x21 => std.debug.print("{c}", .{ch}),
-            0x23...0x5b => std.debug.print("{c}", .{ch}),
-            0x5d...0x7e => std.debug.print("{c}", .{ch}),
-            else => std.debug.print("\\x{x:0>2}", .{ch}),
+            '\n' => try wr.print("\\n", .{}),
+            '\r' => try wr.print("\\r", .{}),
+            '\t' => try wr.print("\\t", .{}),
+            '\\' => try wr.print("\\\\", .{}),
+            '"' => try wr.print("\\\"", .{}),
+            0x20...0x21 => try wr.print("{c}", .{ch}),
+            0x23...0x5b => try wr.print("{c}", .{ch}),
+            0x5d...0x7e => try wr.print("{c}", .{ch}),
+            else => try wr.print("\\x{x:0>2}", .{ch}),
         }
+        try wr.flush();
     }
 }

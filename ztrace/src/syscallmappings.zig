@@ -1,6 +1,6 @@
-const std = @import("std");
+const std: type = @import("std");
 
-const linux = std.os.linux;
+const linux: type = std.os.linux;
 
 pub fn getSysCallName(num: i64) []const u8 {
     const syscall_enum = std.enums.fromInt(linux.SYS, num) orelse return "unknown";
@@ -48,7 +48,7 @@ pub fn openFlagsToString(flags: u64) ![]const u8 {
     const O_DIRECTORY: u64 = 0o200000;
     const O_CLOEXEC: u64 = 0o2000000;
 
-    const access_mode = flags & O_ACCMODE;
+    const access_mode: u64 = flags & O_ACCMODE;
 
     // Check common combinations
     if (flags == O_RDONLY) return "O_RDONLY";
@@ -66,17 +66,20 @@ pub fn openFlagsToString(flags: u64) ![]const u8 {
         if ((flags & O_CLOEXEC) != 0) return "O_RDONLY|O_CLOEXEC";
     }
     var buff: [1024]u8 = undefined;
-    const f = try std.fmt.bufPrint(&buff, "0x{x}", .{flags});
+    const f: []u8 = try std.fmt.bufPrint(&buff, "0x{x}", .{flags});
     return f;
 }
 
 pub fn accessModeToString(mode: u64) ![]const u8 {
-    if (mode == linux.F_OK) return "F_OK";
-    if (mode == linux.R_OK) return "R_OK";
-    if (mode == linux.W_OK) return "W_OK";
-    if (mode == linux.X_OK) return "X_OK";
+    switch (mode) {
+        linux.F_OK => return "F_OK",
+        linux.R_OK => return "R_OK",
+        linux.W_OK => return "W_OK",
+        linux.X_OK => return "X_OK",
+        else => unreachable,
+    }
     var buff: [1024]u8 = undefined;
-    const f = try std.fmt.bufPrint(&buff, "0x{x}", .{mode});
+    const f: []u8 = try std.fmt.bufPrint(&buff, "0x{x}", .{mode});
     return f;
 }
 
