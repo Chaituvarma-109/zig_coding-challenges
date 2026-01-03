@@ -8,7 +8,7 @@ pub fn getSysCallName(num: i64) []const u8 {
 }
 
 pub fn getErrorName(errnum: i64) []const u8 {
-    const err_num = -errnum;
+    const err_num: i64 = -errnum;
     const err_enum = std.enums.fromInt(linux.E, err_num) orelse return "";
     return @tagName(err_enum);
 }
@@ -24,7 +24,7 @@ pub fn mapPrToString(pr: u64) []const u8 {
 }
 
 pub fn getErrorDescription(errnum: i64) []const u8 {
-    const err_num = -errnum;
+    const err_num: i64 = -errnum;
     return switch (err_num) {
         @intFromEnum(linux.E.NOENT) => "No Such File or Directory",
         @intFromEnum(linux.E.ACCES) => "Permission Denied",
@@ -162,6 +162,6 @@ pub fn capToString(cap: u64) ![]const u8 {
     if (cap == linux.CAP.SYS_TTY_CONFIG) return "CAP_SYS_TTY_CONFIG";
     if (cap == linux.CAP.WAKE_ALARM) return "CAP_WAKE_ALARM";
     var buff: [2048]u8 = undefined;
-    const cap_str = try std.fmt.bufPrint(&buff, "0x{x} /* CAP_??? */", .{cap});
+    const cap_str: []u8 = try std.fmt.bufPrint(&buff, "0x{x} /* CAP_??? */", .{cap});
     return cap_str;
 }

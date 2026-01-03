@@ -1,11 +1,11 @@
-const std = @import("std");
-const syscall = @import("syscallmappings.zig");
-const callargs = @import("syscallargs.zig");
+const std: type = @import("std");
+const syscall: type = @import("syscallmappings.zig");
+const callargs: type = @import("syscallargs.zig");
 
-const posix = std.posix;
-const linux = std.os.linux;
+const posix: type = std.posix;
+const linux: type = std.os.linux;
 
-const ptrace_syscall_info = extern struct {
+const ptrace_syscall_info: type = extern struct {
     pub const SYSCALL_INFO_ENTRY = 1;
     pub const SYSCALL_INFO_EXIT = 2;
 
@@ -38,14 +38,18 @@ const ptrace_syscall_info = extern struct {
     }
 };
 
-const SyscallStats = struct {
+const SyscallStats: type = struct {
     calls: u64 = 0,
     errors: u64 = 0,
     total_time: u64 = 0,
 };
 
 pub fn main() !void {
-    var alloc: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    var degpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = degpa.deinit();
+    const dealloc: std.mem.Allocator = degpa.allocator();
+
+    var alloc: std.heap.ArenaAllocator = .init(dealloc);
     defer alloc.deinit();
     const gpa: std.mem.Allocator = alloc.allocator();
 
@@ -65,7 +69,7 @@ pub fn main() !void {
         external_process = args[1..];
     }
 
-    const pid = try posix.fork();
+    const pid: std.posix.fd_t = try posix.fork();
 
     switch (pid) {
         -1 => {
@@ -83,9 +87,6 @@ pub fn main() !void {
             _ = linux.ptrace(linux.PTRACE.SETOPTIONS, pid, 0, linux.PTRACE.O.TRACESYSGOOD, 0);
 
             var curr_syscall: i64 = 0;
-            var ret_val: i64 = undefined;
-            var syscall_args: [6]u64 = undefined;
-            var syscall_name: []const u8 = undefined;
 
             var stats_map: std.AutoHashMap(i64, SyscallStats) = .init(gpa);
             defer stats_map.deinit();
@@ -111,16 +112,16 @@ pub fn main() !void {
 
                     if (syscall_info.isEntry()) {
                         curr_syscall = @intCast(syscall_info.data.entry.nr);
-                        syscall_args = syscall_info.data.entry.args;
+                        const syscall_args: [6]u64 = syscall_info.data.entry.args;
                         entry_time = try .now();
 
                         if (!print_stat) {
-                            syscall_name = syscall.getSysCallName(curr_syscall);
+                            const syscall_name: []const u8 = syscall.getSysCallName(curr_syscall);
                             std.debug.print("[\x1b[33m{s}\x1b[0m] (", .{syscall_name});
                             try callargs.printSysArgs(gpa, pid, syscall_args, curr_syscall);
                         }
                     } else if (syscall_info.isExit()) {
-                        ret_val = syscall_info.data.exit.rval;
+                        const ret_val: i64 = syscall_info.data.exit.rval;
                         var exit_time: std.time.Instant = try .now();
 
                         const duration: u64 = exit_time.since(entry_time);
