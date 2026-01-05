@@ -161,15 +161,13 @@ pub fn main() !void {
         try wr.flush();
     }
 
-    var transfer_buffer: [body_max_size]u8 = undefined;
-    const body_reader = res.reader(&transfer_buffer);
+    var transfer_buffer: [300]u8 = undefined;
+    var decompress: std.http.Decompress = undefined;
+    var decompress_buffer: [std.compress.flate.max_window_len]u8 = undefined;
+    const body_reader = res.readerDecompressing(&transfer_buffer, &decompress, &decompress_buffer);
 
-    const n: usize = body_reader.stream(wr, .limited(body_max_size)) catch |err| switch (err) {
-        error.EndOfStream => return,
-        else => {
-            std.log.err("err: {}\n", .{err});
-            return;
-        },
+    const n: usize = body_reader.streamRemaining(wr) catch |err| switch (err) {
+        else => return err,
     };
 
     try wr.print("{s}\n", .{transfer_buffer[0..n]});
