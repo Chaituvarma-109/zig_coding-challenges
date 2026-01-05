@@ -3,15 +3,23 @@ const process = std.process;
 const http = std.http;
 const mem = std.mem;
 
-const body_max_size: usize = 4096;
+const body_max_size: usize = 8192;
 
 pub fn main() !void {
     const page_alloc: mem.Allocator = std.heap.page_allocator;
 
-    var client: http.Client = .{ .allocator = page_alloc };
+    var io_threaded: std.Io.Threaded = .init_single_threaded;
+    const io = io_threaded.io();
+
+    var wbuff: [1024]u8 = undefined;
+    const f = std.Io.File.stdout();
+    var fwr = f.writer(io, &wbuff);
+    const wr = &fwr.interface;
+
+    var client: http.Client = .{ .allocator = page_alloc, .io = io };
     defer client.deinit();
 
-    const args = try process.argsAlloc(page_alloc);
+    const args: [][:0]u8 = try process.argsAlloc(page_alloc);
     defer process.argsFree(page_alloc, args);
 
     var method: http.Method = .GET;
@@ -44,7 +52,8 @@ pub fn main() !void {
         } else if (std.mem.startsWith(u8, arg, "http://") or std.mem.startsWith(u8, arg, "https://")) {
             url = arg;
         } else {
-            std.debug.print("Unknown argument: {s}\n", .{arg});
+            try wr.print("Unknown argument: {s}\n", .{arg});
+            try wr.flush();
             return error.UnknownArgument;
         }
     }
@@ -86,7 +95,8 @@ pub fn main() !void {
         .headers = req_headers,
         .extra_headers = &extra_headers,
     }) catch |err| {
-        std.debug.print("Unable to open the request: {}\n", .{err});
+        try wr.print("Unable to open the request: {}\n", .{err});
+        try wr.flush();
         return;
     };
     defer req.deinit();
@@ -94,19 +104,22 @@ pub fn main() !void {
     if (verbose) {
         const port: u16 = uri.port orelse (if (mem.eql(u8, scheme, "http")) @as(u16, 80) else @as(u16, 443));
         const host: []const u8 = req.headers.host.override;
-        std.debug.print("* Connected to {s} port {d}\n", .{ host, port });
-        std.debug.print("> {s} {s} {s}\n", .{ @tagName(method), path, @tagName(req.version) });
-        std.debug.print("> Host: {s}\n", .{host});
-        std.debug.print("> User-Agent: {s}\n", .{req.headers.user_agent.override});
-        std.debug.print("> {s}: {s}\n", .{ req.extra_headers[0].name, req.extra_headers[0].value });
+        try wr.print("* Connected to {s} port {d}\n", .{ host, port });
+        try wr.print("> {s} {s} {s}\n", .{ @tagName(method), path, @tagName(req.version) });
+        try wr.print("> Host: {s}\n", .{host});
+        try wr.print("> User-Agent: {s}\n", .{req.headers.user_agent.override});
+        try wr.print("> {s}: {s}\n", .{ req.extra_headers[0].name, req.extra_headers[0].value });
+        try wr.flush();
         switch (method) {
             .POST, .PUT => {
-                std.debug.print("> Content-Type: {s}\n", .{req.headers.content_type.override});
-                std.debug.print("> Content-Length: {d}\n", .{data.?.len});
+                try wr.print("> Content-Type: {s}\n", .{req.headers.content_type.override});
+                try wr.print("> Content-Length: {d}\n", .{data.?.len});
+                try wr.flush();
             },
             else => {},
         }
-        std.debug.print("> \n", .{});
+        try wr.print("> \n", .{});
+        try wr.flush();
     }
 
     if (data) |content| {
@@ -123,10 +136,11 @@ pub fn main() !void {
         try req.sendBodiless();
     }
 
-    var res = try req.receiveHead(&redirect_buff);
+    var res: http.Client.Response = try req.receiveHead(&redirect_buff);
 
     if (res.head.status != http.Status.ok) {
-        std.debug.print("{s}\n", .{res.head.status.phrase().?});
+        try wr.print("{s}\n", .{res.head.status.phrase().?});
+        try wr.flush();
         return;
     }
 
@@ -135,28 +149,29 @@ pub fn main() !void {
         const status_phrase: []const u8 = res.head.status.phrase().?;
         const status: http.Status = res.head.status;
 
-        std.debug.print("< {s} {d} {s}\n", .{ @tagName(ver), @intFromEnum(status), status_phrase });
+        try wr.print("< {s} {d} {s}\n", .{ @tagName(ver), @intFromEnum(status), status_phrase });
+        try wr.flush();
 
         var iter: http.HeaderIterator = res.head.iterateHeaders();
         while (iter.next()) |header| {
-            std.debug.print("< {s}:{s}\n", .{ header.name, header.value });
+            try wr.print("< {s}:{s}\n", .{ header.name, header.value });
+            try wr.flush();
         }
-        std.debug.print("< \n", .{});
+        try wr.print("< \n", .{});
+        try wr.flush();
     }
 
-    var resp_wr: std.Io.Writer.Allocating = .init(page_alloc);
-    defer resp_wr.deinit();
+    var transfer_buffer: [body_max_size]u8 = undefined;
+    const body_reader = res.reader(&transfer_buffer);
 
-    var body_buff: [body_max_size]u8 = undefined;
-    const body_reader = res.request.reader.bodyReader(&body_buff, req.response_transfer_encoding, res.request.response_content_length.?);
-
-    _ = body_reader.stream(&resp_wr.writer, .limited(body_max_size)) catch |err| switch (err) {
-        error.EndOfStream => {},
+    const n: usize = body_reader.stream(wr, .limited(body_max_size)) catch |err| switch (err) {
+        error.EndOfStream => return,
         else => {
             std.log.err("err: {}\n", .{err});
             return;
         },
     };
-    const body: []u8 = resp_wr.written();
-    std.debug.print("{s}\n", .{body});
+
+    try wr.print("{s}\n", .{transfer_buffer[0..n]});
+    try wr.flush();
 }
