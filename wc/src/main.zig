@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const Io = std.Io;
+
 const Config = struct {
     show_lines: bool = false,
     show_words: bool = false,
@@ -8,11 +10,11 @@ const Config = struct {
     filename: ?[]const u8 = null,
 
     fn init() !Config {
-        var config = Config{};
+        var config: Config = .{};
         var args = std.process.args();
         _ = args.skip();
 
-        var has_options = false;
+        var has_options: bool = false;
 
         while (args.next()) |arg| {
             if (arg.len >= 2 and arg[0] == '-') {
@@ -74,7 +76,7 @@ const Wc = struct {
 
                 if (char == '\n') wc.lines += 1;
 
-                const ws = std.ascii.isWhitespace(char);
+                const ws: bool = std.ascii.isWhitespace(char);
                 if (!ws and !in_word) {
                     wc.words += 1;
                     in_word = true;
@@ -91,10 +93,13 @@ pub fn main() !void {
     const config = try Config.init();
     const count = try Wc.count(config);
 
+    var io_threaded: Io.Threaded = .init_single_threaded;
+    const io: Io = io_threaded.ioBasic();
+
     var wbuff: [256]u8 = undefined;
-    const file = std.fs.File.stdout();
-    var fw = file.writer(&wbuff);
-    const wr = &fw.interface;
+    const file = Io.File.stdout();
+    var fwr = file.writer(io, &wbuff);
+    const wr: *Io.Writer = &fwr.interface;
 
     if (config.show_lines) try wr.print("{d} ", .{count.lines});
     if (config.show_words) try wr.print("{d} ", .{count.words});
