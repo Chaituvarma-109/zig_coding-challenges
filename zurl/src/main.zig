@@ -2,19 +2,20 @@ const std = @import("std");
 const process = std.process;
 const http = std.http;
 const mem = std.mem;
+const Io = std.Io;
 
 const body_max_size: usize = 8192;
 
 pub fn main() !void {
     const page_alloc: mem.Allocator = std.heap.page_allocator;
 
-    var io_threaded: std.Io.Threaded = .init_single_threaded;
-    const io = io_threaded.io();
+    var io_threaded: Io.Threaded = .init_single_threaded;
+    const io: Io = io_threaded.io();
 
     var wbuff: [1024]u8 = undefined;
-    const f = std.Io.File.stdout();
+    const f: Io.File = .stdout();
     var fwr = f.writer(io, &wbuff);
-    const wr = &fwr.interface;
+    const wr: *Io.Writer = &fwr.interface;
 
     var client: http.Client = .{ .allocator = page_alloc, .io = io };
     defer client.deinit();
@@ -30,13 +31,13 @@ pub fn main() !void {
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
-        const arg = args[i];
+        const arg: [:0]u8 = args[i];
         if (std.mem.eql(u8, arg, "-v")) {
             verbose = true;
         } else if (std.mem.eql(u8, arg, "-X")) {
             i += 1;
             if (i >= args.len) return error.MissingMethodArgument;
-            const method_str = args[i];
+            const method_str: [:0]u8 = args[i];
 
             if (mem.eql(u8, method_str, "POST")) method = .POST;
             if (mem.eql(u8, method_str, "DELETE")) method = .DELETE;
@@ -66,8 +67,6 @@ pub fn main() !void {
         std.log.err("error: {}\n", .{err});
         return;
     };
-    const path: []const u8 = uri.path.percent_encoded;
-    const scheme: []const u8 = uri.scheme;
 
     var req_headers: http.Client.Request.Headers = .{};
     switch (method) {
@@ -102,8 +101,11 @@ pub fn main() !void {
     defer req.deinit();
 
     if (verbose) {
+        const path: []const u8 = uri.path.percent_encoded;
+        const scheme: []const u8 = uri.scheme;
         const port: u16 = uri.port orelse (if (mem.eql(u8, scheme, "http")) @as(u16, 80) else @as(u16, 443));
         const host: []const u8 = req.headers.host.override;
+
         try wr.print("* Connected to {s} port {d}\n", .{ host, port });
         try wr.print("> {s} {s} {s}\n", .{ @tagName(method), path, @tagName(req.version) });
         try wr.print("> Host: {s}\n", .{host});
@@ -124,14 +126,7 @@ pub fn main() !void {
 
     if (data) |content| {
         req.transfer_encoding = .{ .content_length = content.len };
-        var body: http.BodyWriter = req.sendBody(&.{}) catch |err| switch (err) {
-            error.WriteFailed => {
-                std.log.err("failed writing {}\n", .{err});
-                return;
-            },
-        };
-        try body.writer.writeAll(content);
-        try body.end();
+        try req.sendBodyComplete(content);
     } else {
         try req.sendBodiless();
     }
@@ -161,15 +156,19 @@ pub fn main() !void {
         try wr.flush();
     }
 
-    var transfer_buffer: [300]u8 = undefined;
+    var transfer_buffer: [64]u8 = undefined;
     var decompress: std.http.Decompress = undefined;
     var decompress_buffer: [std.compress.flate.max_window_len]u8 = undefined;
-    const body_reader = res.readerDecompressing(&transfer_buffer, &decompress, &decompress_buffer);
+    const body_reader: *Io.Reader = res.readerDecompressing(&transfer_buffer, &decompress, &decompress_buffer);
 
-    const n: usize = body_reader.streamRemaining(wr) catch |err| switch (err) {
+    var resp_wr: Io.Writer.Allocating = .init(page_alloc);
+    defer resp_wr.deinit();
+
+    _ = body_reader.streamRemaining(&resp_wr.writer) catch |err| switch (err) {
         else => return err,
     };
 
-    try wr.print("{s}\n", .{transfer_buffer[0..n]});
+    const bytes: []u8 = resp_wr.written();
+    try wr.print("{s}\n", .{bytes});
     try wr.flush();
 }
