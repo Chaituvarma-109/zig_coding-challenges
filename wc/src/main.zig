@@ -9,14 +9,14 @@ const Config = struct {
     show_bytes: bool = false,
     filename: ?[]const u8 = null,
 
-    fn init() !Config {
+    fn init(args: std.process.Args) !Config {
         var config: Config = .{};
-        var args = std.process.args();
-        _ = args.skip();
+        var arg_iter = args.iterate();
+        _ = arg_iter.skip();
 
         var has_options: bool = false;
 
-        while (args.next()) |arg| {
+        while (arg_iter.next()) |arg| {
             if (arg.len >= 2 and arg[0] == '-') {
                 has_options = true;
                 for (arg[1..]) |opt| {
@@ -89,8 +89,10 @@ const Wc = struct {
     }
 };
 
-pub fn main() !void {
-    const config = try Config.init();
+pub fn main(init: std.process.Init) !void {
+    const args: std.process.Args = init.minimal.args;
+
+    const config = try Config.init(args);
     const count = try Wc.count(config);
 
     var io_threaded: Io.Threaded = .init_single_threaded;
