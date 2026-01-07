@@ -21,13 +21,15 @@ const Request = struct {
     }
 };
 
-pub fn main() !void {
-    const page_alloc: Allocator = std.heap.page_allocator;
+// init: std.process.Init.Minimal
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
 
-    var io_threaded: Io.Threaded = .init(page_alloc, .{ .concurrent_limit = .limited(4) });
-    defer io_threaded.deinit();
-
-    var io: Io = io_threaded.io();
+    // below is another way to implement io
+    // const page_alloc: Allocator = std.heap.page_allocator;
+    // var io_threaded: Io.Threaded = .init(page_alloc, .{ .concurrent_limit = .limited(4), .environ = init.environ });
+    // defer io_threaded.deinit();
+    // var io: Io = io_threaded.io();
 
     const address: net.IpAddress = try .parse("127.0.0.1", 8080);
     var listener: net.Server = try address.listen(io, .{
@@ -41,12 +43,12 @@ pub fn main() !void {
             continue;
         };
 
-        var fut = try io.concurrent(handleRequest, .{ page_alloc, conn, io });
+        var fut = try io.concurrent(handleRequest, .{ conn, io });
         _ = fut.await(io);
     }
 }
 
-fn handleRequest(alloc: Allocator, conn: net.Stream, io: Io) void {
+fn handleRequest(conn: net.Stream, io: Io) void {
     defer conn.close(io);
 
     var r: Io.net.Stream.Reader = conn.reader(io, &.{});
@@ -55,15 +57,15 @@ fn handleRequest(alloc: Allocator, conn: net.Stream, io: Io) void {
     const reader: *Io.Reader = &r.interface;
     const writer: *Io.Writer = &w.interface;
 
-    var resp_wr: Io.Writer.Allocating = .init(alloc);
-    defer resp_wr.deinit();
+    var fbuff: [1024]u8 = undefined;
+    var resp_wr: Io.Writer = .fixed(&fbuff);
 
-    _ = reader.stream(&resp_wr.writer, .unlimited) catch |err| {
+    _ = reader.stream(&resp_wr, .unlimited) catch |err| {
         std.log.err("err: {any}\n", .{err});
         return;
     };
 
-    const buff: []u8 = resp_wr.written();
+    const buff: []u8 = resp_wr.buffered();
     const req: Request = .new(buff);
     var r_buff: [1024]u8 = undefined;
 
