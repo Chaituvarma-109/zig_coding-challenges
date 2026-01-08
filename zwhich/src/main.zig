@@ -1,6 +1,10 @@
 const std: type = @import("std");
+const process = std.process;
 
-pub fn main() !void {
+pub fn main(init: process.Init.Minimal) !void {
+    const env: process.Environ = init.environ;
+    var args: process.Args = init.args;
+
     var io_threaded: std.Io.Threaded = .init_single_threaded;
     const io: std.Io = io_threaded.io();
 
@@ -9,12 +13,12 @@ pub fn main() !void {
     var fwr = f.writer(io, &buff);
     const wr: *std.Io.Writer = &fwr.interface;
 
-    var args = std.process.args();
-    _ = args.skip();
+    var arg_iter = args.iterate();
+    _ = arg_iter.skip();
 
-    const paths: [:0]const u8 = std.posix.getenv("PATH") orelse return error.patherror;
+    const paths: [:0]const u8 = env.getPosix("PATH") orelse return error.patherror;
 
-    while (args.next()) |command| {
+    while (arg_iter.next()) |command| {
         var path_iter = std.mem.tokenizeAny(u8, paths, ":");
         var path_buff: [std.os.linux.PATH_MAX]u8 = undefined;
 
