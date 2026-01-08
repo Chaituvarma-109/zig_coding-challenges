@@ -6,7 +6,8 @@ const Io = std.Io;
 
 const body_max_size: usize = 8192;
 
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
+    const args: std.process.Args = init.args;
     const page_alloc: mem.Allocator = std.heap.page_allocator;
 
     var io_threaded: Io.Threaded = .init_single_threaded;
@@ -20,42 +21,32 @@ pub fn main() !void {
     var client: http.Client = .{ .allocator = page_alloc, .io = io };
     defer client.deinit();
 
-    const args: [][:0]u8 = try process.argsAlloc(page_alloc);
-    defer process.argsFree(page_alloc, args);
+    var arg_iter = try args.iterateAllocator(page_alloc);
+    defer arg_iter.deinit();
+
+    _ = arg_iter.skip();
 
     var method: http.Method = .GET;
     var verbose: bool = false;
     var url: []const u8 = "http://eu.httpbin.org/get";
     var headers: []const u8 = "";
-    var data: ?[]u8 = null;
+    var data: ?[:0]const u8 = null;
 
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const arg: [:0]u8 = args[i];
-        if (std.mem.eql(u8, arg, "-v")) {
+    while (arg_iter.next()) |arg| {
+        if (mem.eql(u8, arg, "-v")) {
             verbose = true;
-        } else if (std.mem.eql(u8, arg, "-X")) {
-            i += 1;
-            if (i >= args.len) return error.MissingMethodArgument;
-            const method_str: [:0]u8 = args[i];
+        } else if (mem.eql(u8, arg, "-X")) {
+            const method_str = arg_iter.next() orelse return error.MissingMethodArgument;
 
             if (mem.eql(u8, method_str, "POST")) method = .POST;
             if (mem.eql(u8, method_str, "DELETE")) method = .DELETE;
             if (mem.eql(u8, method_str, "PUT")) method = .PUT;
         } else if (mem.eql(u8, arg, "-d")) {
-            i += 1;
-            if (i >= args.len) return error.MissingHeaderArgument;
-            data = args[i];
+            data = arg_iter.next();
         } else if (mem.eql(u8, arg, "-H")) {
-            i += 1;
-            if (i >= args.len) return error.MissingHeaderArgument;
-            headers = args[i];
-        } else if (std.mem.startsWith(u8, arg, "http://") or std.mem.startsWith(u8, arg, "https://")) {
+            headers = arg_iter.next() orelse return error.MissingHeaderArgument;
+        } else if (mem.startsWith(u8, arg, "http://") or mem.startsWith(u8, arg, "https://")) {
             url = arg;
-        } else {
-            try wr.print("Unknown argument: {s}\n", .{arg});
-            try wr.flush();
-            return error.UnknownArgument;
         }
     }
 
@@ -126,7 +117,8 @@ pub fn main() !void {
 
     if (data) |content| {
         req.transfer_encoding = .{ .content_length = content.len };
-        try req.sendBodyComplete(content);
+        const bytes: []u8 = @constCast(mem.span(content.ptr));
+        try req.sendBodyComplete(bytes);
     } else {
         try req.sendBodiless();
     }
