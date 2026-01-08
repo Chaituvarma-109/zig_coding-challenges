@@ -153,14 +153,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var decompress_buffer: [std.compress.flate.max_window_len]u8 = undefined;
     const body_reader: *Io.Reader = res.readerDecompressing(&transfer_buffer, &decompress, &decompress_buffer);
 
-    var resp_wr: Io.Writer.Allocating = .init(page_alloc);
-    defer resp_wr.deinit();
+    // var fbuff: [1024]u8 = undefined;
+    // var resp_wr: Io.Writer = .fixed(&fbuff);
 
-    _ = body_reader.streamRemaining(&resp_wr.writer) catch |err| switch (err) {
+    _ = body_reader.streamRemaining(wr) catch |err| switch (err) {
         else => return err,
     };
 
-    const bytes: []u8 = resp_wr.written();
-    try wr.print("{s}\n", .{bytes});
+    // const bytes: []u8 = resp_wr.buffered();
+    // try resp_wr.writeAll(bytes);
     try wr.flush();
 }
