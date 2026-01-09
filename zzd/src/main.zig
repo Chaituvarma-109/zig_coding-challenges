@@ -56,7 +56,7 @@ pub fn main(init: process.Init.Minimal) !void {
     var io_threaded: Io.Threaded = .init_single_threaded;
     const io: Io = io_threaded.io();
 
-    const f: File = try Io.Dir.openFile(.cwd(), io, arg.file, .{ .mode = .read_write });
+    const f: File = try Io.Dir.openFile(.cwd(), io, arg.file, .{ .mode = .read_only });
     defer f.close(io);
 
     const stat: File.Stat = try f.stat(io);
@@ -100,7 +100,6 @@ fn dumpHex(buff: []u8, args: Config, tty: std.Io.Terminal) !void {
         try tty.setColor(.dim);
         try bw.print("{x:0>8}  ", .{line_offset * columns + args.seek});
         try tty.setColor(.reset);
-        try bw.flush();
 
         // 2. Print the bytes.
         var lit = mem.window(u8, window, chunklen, chunklen);
@@ -110,15 +109,12 @@ fn dumpHex(buff: []u8, args: Config, tty: std.Io.Terminal) !void {
                 var iter = mem.reverseIterator(chunk);
                 while (iter.next()) |byte| {
                     try bw.print("{x:0>2}", .{byte});
-                    try bw.flush();
                 }
             } else {
                 try bw.printHex(chunk, .lower);
-                try bw.flush();
             }
             try tty.setColor(.reset);
             try bw.writeByte(' ');
-            try bw.flush();
         }
 
         // print spaces
@@ -127,16 +123,13 @@ fn dumpHex(buff: []u8, args: Config, tty: std.Io.Terminal) !void {
             const missing_chunks: usize = (missing_bytes + chunklen - 1) / chunklen;
 
             for (0..missing_bytes) |_| {
-                try bw.print("  ", .{});
-                try bw.flush();
+                try bw.writeByte(' ');
             }
             for (0..missing_chunks) |_| {
                 try bw.writeByte(' ');
-                try bw.flush();
             }
         }
         try bw.writeByte(' ');
-        try bw.flush();
 
         // 3. Print the characters.
         for (window) |byte| {
@@ -144,16 +137,14 @@ fn dumpHex(buff: []u8, args: Config, tty: std.Io.Terminal) !void {
                 try tty.setColor(.green);
                 try bw.writeByte(byte);
                 try tty.setColor(.reset);
-                try bw.flush();
             } else {
                 try bw.writeByte('.');
-                try bw.flush();
             }
         }
         try bw.writeByte('\n');
-        try bw.flush();
         line_offset += 1;
     }
+    try bw.flush();
 }
 
 fn revertdump(rd: *Io.Reader, wr: *Writer) !void {
@@ -167,7 +158,7 @@ fn revertdump(rd: *Io.Reader, wr: *Writer) !void {
         var out: [50]u8 = undefined;
         while (hexes.next()) |hexstr| {
             try wr.print("{s}", .{try std.fmt.hexToBytes(&out, hexstr)});
-            try wr.flush();
         }
     }
+    try wr.flush();
 }
