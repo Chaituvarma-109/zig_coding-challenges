@@ -1,7 +1,7 @@
-const std = @import("std");
+const std: type = @import("std");
 
-const linux = std.os.linux;
-const syscall = @import("syscallmappings.zig");
+const linux: type = std.os.linux;
+const syscall: type = @import("syscallmappings.zig");
 
 pub fn printSysArgs(gpa: std.mem.Allocator, pid: i32, rargs: [6]u64, syscall_num: i64, wr: *std.Io.Writer) !void {
     const syscall_enum = @tagName(std.enums.fromInt(linux.SYS, syscall_num).?);
@@ -333,7 +333,7 @@ fn readArgvArray(allocator: std.mem.Allocator, pid: i32, argv_ptr: u64) ![]u8 {
         .{ .base = @ptrFromInt(argv_ptr), .len = max_args * @sizeOf(u64) },
     };
 
-    const bytes_read = linux.process_vm_readv(pid, &local_iov, &remote_iov, 0);
+    const bytes_read: usize = linux.process_vm_readv(pid, &local_iov, &remote_iov, 0);
 
     if (bytes_read < 0 or @as(isize, @bitCast(bytes_read)) < 0) {
         try result.appendSlice(allocator, "]");
@@ -347,7 +347,7 @@ fn readArgvArray(allocator: std.mem.Allocator, pid: i32, argv_ptr: u64) ![]u8 {
 
         if (i > 0) try result.appendSlice(allocator, ", ");
 
-        const str = readStringFromProcess(allocator, pid, ptr_val) catch {
+        const str: []u8 = readStringFromProcess(allocator, pid, ptr_val) catch {
             try result.appendSlice(allocator, "\"...\"");
             continue;
         };
@@ -363,7 +363,7 @@ fn readArgvArray(allocator: std.mem.Allocator, pid: i32, argv_ptr: u64) ![]u8 {
 }
 
 fn readMemoryFromProcess(allocator: std.mem.Allocator, pid: i32, addr: u64, len: usize) ![]u8 {
-    var result = try allocator.alloc(u8, len);
+    var result: []u8 = try allocator.alloc(u8, len);
     errdefer allocator.free(result);
 
     const local_iov = [_]std.posix.iovec{
@@ -374,7 +374,7 @@ fn readMemoryFromProcess(allocator: std.mem.Allocator, pid: i32, addr: u64, len:
         .{ .base = @ptrFromInt(addr), .len = len },
     };
 
-    const bytes_read = linux.process_vm_readv(pid, &local_iov, &remote_iov, 0);
+    const bytes_read: usize = linux.process_vm_readv(pid, &local_iov, &remote_iov, 0);
 
     if (bytes_read <= 0 or @as(isize, @bitCast(bytes_read)) < 0) {
         return error.ReadFailed;

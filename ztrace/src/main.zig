@@ -5,6 +5,7 @@ const callargs: type = @import("syscallargs.zig");
 const posix: type = std.posix;
 const linux: type = std.os.linux;
 const Io: type = std.Io;
+const process: type = std.process;
 
 const ptrace_syscall_info: type = extern struct {
     pub const SYSCALL_INFO_ENTRY = 1;
@@ -45,7 +46,7 @@ const SyscallStats: type = struct {
     total_time: u64 = 0,
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var degpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = degpa.deinit();
     const dealloc: std.mem.Allocator = degpa.allocator();
@@ -54,7 +55,8 @@ pub fn main() !void {
     defer alloc.deinit();
     const gpa: std.mem.Allocator = alloc.allocator();
 
-    var io_threaded: Io.Threaded = .init_single_threaded;
+    var io_threaded: Io.Threaded = .init(gpa, .{ .environ = init.minimal.environ });
+    defer io_threaded.deinit();
     const io: Io = io_threaded.ioBasic();
 
     var buff: [1024]u8 = undefined;
@@ -62,20 +64,21 @@ pub fn main() !void {
     var fwr: Io.File.Writer = f.writer(io, &buff);
     const wr: *Io.Writer = &fwr.interface;
 
-    const args: [][:0]u8 = try std.process.argsAlloc(gpa);
+    const args: process.Args = init.minimal.args;
+    const ar: []const [:0]const u8 = try args.toSlice(gpa);
 
-    std.debug.assert(args.len >= 2);
+    std.debug.assert(ar.len >= 2);
 
-    var get_stat: [:0]u8 = undefined;
+    var get_stat: [:0]const u8 = undefined;
     var print_stat: bool = false;
-    var external_process: [][:0]u8 = undefined;
+    var external_process: []const [:0]const u8 = undefined;
 
-    if (std.mem.eql(u8, args[1], "-c")) {
-        get_stat = args[1];
+    if (std.mem.eql(u8, ar[1], "-c")) {
+        get_stat = ar[1];
         print_stat = true;
-        external_process = args[2..];
+        external_process = ar[2..];
     } else {
-        external_process = args[1..];
+        external_process = ar[1..];
     }
 
     const pid: std.posix.fd_t = try posix.fork();
@@ -89,7 +92,7 @@ pub fn main() !void {
         0 => {
             _ = linux.ptrace(linux.PTRACE.TRACEME, pid, 0, 0, 0);
             _ = linux.kill(linux.getpid(), linux.SIG.STOP);
-            return std.process.execv(gpa, external_process);
+            return std.process.replace(io, .{ .argv = external_process });
         },
         else => {
             var status: u32 = 0;
