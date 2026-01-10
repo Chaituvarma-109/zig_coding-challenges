@@ -81,7 +81,7 @@ pub fn main(init: std.process.Init) !void {
         external_process = ar[1..];
     }
 
-    const pid: std.posix.fd_t = try posix.fork();
+    const pid: std.posix.fd_t = @intCast(linux.fork());
 
     switch (pid) {
         -1 => {
