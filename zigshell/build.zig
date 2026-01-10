@@ -2,7 +2,6 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-
     const optimize = b.standardOptimizeOption(.{});
 
     const exe_mod = b.createModule(.{
@@ -16,7 +15,6 @@ pub fn build(b: *std.Build) void {
         .name = "zigshell",
         .root_module = exe_mod,
     });
-    exe.linkLibC();
 
     b.installArtifact(exe);
 
