@@ -52,24 +52,6 @@ fn typeBuilt(alloc: mem.Allocator, io: Io, args: []const u8) !?[]const u8 {
     return null;
 }
 
-fn parseCommand(alloc: mem.Allocator, cmd_str: []const u8) ![][]const u8 {
-    var args: std.ArrayList([]const u8) = .empty;
-    errdefer {
-        for (args.items) |item| {
-            alloc.free(item);
-        }
-        args.deinit(alloc);
-    }
-
-    var tokens_iter = mem.tokenizeScalar(u8, cmd_str, ' ');
-    while (tokens_iter.next()) |token| {
-        const arg_copy: []u8 = try alloc.dupe(u8, token);
-        try args.append(alloc, arg_copy);
-    }
-
-    return args.toOwnedSlice(alloc);
-}
-
 fn executePipeCmds(alloc: mem.Allocator, io: Io, inp: []const u8) !void {
     var commands: std.ArrayList([]const u8) = .empty;
     defer commands.deinit(alloc);
@@ -82,18 +64,24 @@ fn executePipeCmds(alloc: mem.Allocator, io: Io, inp: []const u8) !void {
 
     if (commands.items.len == 0) return;
 
-    try restoreDefaultSignalHandlers();
-    defer setupSignalHandlers() catch {};
-
     // Multiple commands with pipes
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(alloc);
+    const pipes_count: usize = commands.items.len - 1;
+    var pipes = try alloc.alloc([2]posix.fd_t, pipes_count);
+    defer alloc.free(pipes);
 
-    var stderr_buf: std.ArrayList(u8) = .empty;
-    defer stderr_buf.deinit(alloc);
+    // Create all pipes
+    for (0..pipes_count) |i| {
+        const new_pipe = try Io.Threaded.pipe2(.{ .CLOEXEC = true });
+        pipes[i][0] = new_pipe[0];
+        pipes[i][1] = new_pipe[1];
+    }
+
+    var pids = try alloc.alloc(posix.pid_t, commands.items.len);
+    defer alloc.free(pids);
 
     for (commands.items, 0..) |cmd_str, i| {
-        const args: [][]const u8 = try parseCommand(alloc, cmd_str);
+        // changed from parseCommand to parseInp function.
+        const args: [][]const u8 = try parseInp(alloc, cmd_str);
         defer {
             for (args) |arg| {
                 alloc.free(arg);
@@ -113,68 +101,59 @@ fn executePipeCmds(alloc: mem.Allocator, io: Io, inp: []const u8) !void {
             }
         }
 
-        // Execute the builtin commands
-        if (is_builtin) {
-            if (mem.eql(u8, cmd, "exit")) {
-                try handleExit();
-            } else if (mem.eql(u8, cmd, "cd")) {
-                try handleCd(args);
-            } else if (mem.eql(u8, cmd, "pwd")) {
-                try handlePwd();
+        // Fork a process for both external commands and builtins
+        // This ensures consistent pipeline behavior
+        const pid: i32 = @intCast(linux.fork());
+
+        if (pid == 0) {
+            // Child process
+
+            // Set up input from previous command if not first command
+            if (i > 0) {
+                try Io.Threaded.dup2(pipes[i - 1][0], posix.STDIN_FILENO);
             }
-            process.exit(0);
-        }
 
-        if (i == 0) {
-            // First command: capture stdout
-            var child: process.Child = try process.spawn(io, .{
-                .argv = args,
-                .stdout = .pipe,
-                .stderr = .pipe,
-            });
-            try child.collectOutput(alloc, &out, &stderr_buf, 10 * 1024 * 1024);
-            _ = try child.wait(io);
-        } else if (i == commands.items.len - 1) {
-            // Last command: use input from previous, output to stdout
-            var child: process.Child = try process.spawn(io, .{
-                .argv = args,
-                .stdin = .pipe,
-            });
+            // Set up output to next command if not last command
+            if (i < commands.items.len - 1) {
+                try Io.Threaded.dup2(pipes[i][1], posix.STDOUT_FILENO);
+            }
 
-            // Write previous output to this command's stdin
-            var buff: [1024]u8 = undefined;
-            const in_f: Io.File = child.stdin.?;
-            var wr: Io.File.Writer = in_f.writer(io, &buff);
-            _ = &wr.interface.writeAll(out.items);
-            _ = &wr.interface.flush();
-            in_f.close(io);
-            child.stdin = null;
+            // Close all pipe file descriptors in child
+            for (0..pipes_count) |j| {
+                posix.close(pipes[j][0]);
+                posix.close(pipes[j][1]);
+            }
 
-            _ = try child.wait(io);
+            // Execute the builtin commands
+            if (is_builtin) {
+                if (mem.eql(u8, cmd, "exit")) try handleExit();
+                if (mem.eql(u8, cmd, "cd")) try handleCd(args);
+                if (mem.eql(u8, cmd, "pwd")) try handlePwd();
+                process.exit(0);
+            } else {
+                // Execute external command
+                const exec_error = std.process.replace(io, .{ .argv = args });
+                if (exec_error != error.Success) {
+                    std.debug.print("execv failed for {s}: {}\n", .{ cmd, exec_error });
+                    process.exit(1);
+                }
+            }
         } else {
-            // Middle command: use input from previous, capture stdout
-            var child: process.Child = try process.spawn(io, .{
-                .argv = args,
-                .stdin = .pipe,
-                .stdout = .pipe,
-                .stderr = .pipe,
-            });
-
-            // Write previous output to stdin
-            var buff: [1024]u8 = undefined;
-            const in_f: Io.File = child.stdin.?;
-            var wr: Io.File.Writer = in_f.writer(io, &buff);
-            _ = &wr.interface.writeAll(out.items);
-            _ = &wr.flush();
-            in_f.close(io);
-            child.stdin = null;
-
-            // Clear and collect new output
-            out.clearRetainingCapacity();
-            stderr_buf.clearRetainingCapacity();
-            try child.collectOutput(alloc, &out, &stderr_buf, 10 * 1024 * 1024);
-            _ = try child.wait(io);
+            // Parent process
+            pids[i] = pid;
         }
+    }
+
+    // Close all pipe ends in the parent
+    for (pipes) |pipe| {
+        posix.close(pipe[0]);
+        posix.close(pipe[1]);
+    }
+
+    // Wait for all child processes
+    for (pids) |pid| {
+        var status: u32 = 0;
+        _ = linux.waitpid(pid, &status, 0);
     }
 }
 
@@ -284,7 +263,7 @@ pub fn main(init: process.Init) !void {
 
     std.debug.print("ccsh> ", .{});
     while (true) {
-        const ln: []u8 = try stdin.takeDelimiter('\n') orelse return;
+        const ln: []u8 = try stdin.takeDelimiter('\n') orelse continue;
         if (mem.count(u8, ln, "|") > 0) {
             try executePipeCmds(alloc, io, ln);
             std.debug.print("ccsh> ", .{});
@@ -324,8 +303,9 @@ pub fn main(init: process.Init) !void {
         }
 
         var f: ?Io.File = null;
-        var ebuf: [1024]u8 = undefined;
-        var obuff: [1024]u8 = undefined;
+        // var ebuf: [1024]u8 = undefined;
+        // var obuff: [1024]u8 = undefined;
+        var buff: [1024]u8 = undefined;
         var argv: [][]const u8 = parsed_cmds;
         var stdout: *Io.Writer = &stdout_writer.interface;
         var stderr: *Io.Writer = &stderr_writer.interface;
@@ -333,19 +313,24 @@ pub fn main(init: process.Init) !void {
         if (index) |ind| {
             argv = parsed_cmds[0..ind];
             f = try Io.Dir.createFile(.cwd(), io, parsed_cmds[ind + 1], .{ .truncate = !append });
-            if (target == 1) {
-                if (f) |file| {
-                    var fwr = file.writer(io, &obuff);
-                    if (append) try fwr.seekTo(fwr.logicalPos());
-                    stdout = &fwr.interface;
-                }
-            } else if (target == 2) {
-                if (f) |file| {
-                    var fwr = file.writer(io, &ebuf);
-                    if (append) try fwr.seekTo(fwr.logicalPos());
-                    stderr = &fwr.interface;
-                }
+            if (f) |file| {
+                var fwr = file.writer(io, &buff);
+                if (append) try fwr.seekTo(fwr.logicalPos());
+                if (target == 1) stdout = &fwr.interface else stderr = &fwr.interface;
             }
+            // if (target == 1) {
+            //     if (f) |file| {
+            //         var fwr = file.writer(io, &obuff);
+            //         if (append) try fwr.seekTo(fwr.logicalPos());
+            //         stdout = &fwr.interface;
+            //     }
+            // } else if (target == 2) {
+            //     if (f) |file| {
+            //         var fwr = file.writer(io, &ebuf);
+            //         if (append) try fwr.seekTo(fwr.logicalPos());
+            //         stderr = &fwr.interface;
+            //     }
+            // }
         }
 
         defer if (f) |file| file.close(io);
