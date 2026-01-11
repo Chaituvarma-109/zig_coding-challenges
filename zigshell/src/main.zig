@@ -86,19 +86,11 @@ fn executePipeCmds(alloc: mem.Allocator, io: Io, inp: []const u8) !void {
     defer setupSignalHandlers() catch {};
 
     // Multiple commands with pipes
-    const pipes_count: usize = commands.items.len - 1;
-    var pipes = try alloc.alloc([2]posix.fd_t, pipes_count);
-    defer alloc.free(pipes);
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
 
-    // Create all pipes
-    for (0..pipes_count) |i| {
-        const new_pipe = try Io.Threaded.pipe2(.{ .CLOEXEC = true });
-        pipes[i][0] = new_pipe[0];
-        pipes[i][1] = new_pipe[1];
-    }
-
-    var pids = try alloc.alloc(posix.pid_t, commands.items.len);
-    defer alloc.free(pids);
+    var stderr_buf: std.ArrayList(u8) = .empty;
+    defer stderr_buf.deinit(alloc);
 
     for (commands.items, 0..) |cmd_str, i| {
         const args: [][]const u8 = try parseCommand(alloc, cmd_str);
@@ -121,63 +113,68 @@ fn executePipeCmds(alloc: mem.Allocator, io: Io, inp: []const u8) !void {
             }
         }
 
-        // Fork a process for both external commands and builtins
-        // This ensures consistent pipeline behavior
-        const pid: i32 = @intCast(linux.fork());
-
-        if (pid == 0) {
-            // Child process
-
-            // Set up input from previous command if not first command
-            if (i > 0) {
-                try Io.Threaded.dup2(pipes[i - 1][0], posix.STDIN_FILENO);
+        // Execute the builtin commands
+        if (is_builtin) {
+            if (mem.eql(u8, cmd, "exit")) {
+                try handleExit();
+            } else if (mem.eql(u8, cmd, "cd")) {
+                try handleCd(args);
+            } else if (mem.eql(u8, cmd, "pwd")) {
+                try handlePwd();
             }
-
-            // Set up output to next command if not last command
-            if (i < commands.items.len - 1) {
-                try Io.Threaded.dup2(pipes[i][1], posix.STDOUT_FILENO);
-            }
-
-            // Close all pipe file descriptors in child
-            for (0..pipes_count) |j| {
-                posix.close(pipes[j][0]);
-                posix.close(pipes[j][1]);
-            }
-
-            // Execute the builtin commands
-            if (is_builtin) {
-                if (mem.eql(u8, cmd, "exit")) {
-                    try handleExit();
-                } else if (mem.eql(u8, cmd, "cd")) {
-                    try handleCd(args);
-                } else if (mem.eql(u8, cmd, "pwd")) {
-                    try handlePwd();
-                }
-                process.exit(0);
-            } else {
-                // Execute external command
-                const exec_error = process.replace(io, .{ .argv = args });
-                if (exec_error != error.Success) {
-                    std.debug.print("execv failed for {s}: {}\n", .{ cmd, exec_error });
-                    process.exit(1);
-                }
-            }
-        } else {
-            // Parent process
-            pids[i] = pid;
+            process.exit(0);
         }
-    }
 
-    // Close all pipe ends in the parent
-    for (pipes) |pipe| {
-        posix.close(pipe[0]);
-        posix.close(pipe[1]);
-    }
+        if (i == 0) {
+            // First command: capture stdout
+            var child: process.Child = try process.spawn(io, .{
+                .argv = args,
+                .stdout = .pipe,
+                .stderr = .pipe,
+            });
+            try child.collectOutput(alloc, &out, &stderr_buf, 10 * 1024 * 1024);
+            _ = try child.wait(io);
+        } else if (i == commands.items.len - 1) {
+            // Last command: use input from previous, output to stdout
+            var child: process.Child = try process.spawn(io, .{
+                .argv = args,
+                .stdin = .pipe,
+            });
 
-    // Wait for all child processes
-    for (pids) |pid| {
-        var status: u32 = 0;
-        _ = linux.waitpid(pid, &status, 0);
+            // Write previous output to this command's stdin
+            var buff: [1024]u8 = undefined;
+            const in_f: Io.File = child.stdin.?;
+            var wr: Io.File.Writer = in_f.writer(io, &buff);
+            _ = &wr.interface.writeAll(out.items);
+            _ = &wr.interface.flush();
+            in_f.close(io);
+            child.stdin = null;
+
+            _ = try child.wait(io);
+        } else {
+            // Middle command: use input from previous, capture stdout
+            var child: process.Child = try process.spawn(io, .{
+                .argv = args,
+                .stdin = .pipe,
+                .stdout = .pipe,
+                .stderr = .pipe,
+            });
+
+            // Write previous output to stdin
+            var buff: [1024]u8 = undefined;
+            const in_f: Io.File = child.stdin.?;
+            var wr: Io.File.Writer = in_f.writer(io, &buff);
+            _ = &wr.interface.writeAll(out.items);
+            _ = &wr.flush();
+            in_f.close(io);
+            child.stdin = null;
+
+            // Clear and collect new output
+            out.clearRetainingCapacity();
+            stderr_buf.clearRetainingCapacity();
+            try child.collectOutput(alloc, &out, &stderr_buf, 10 * 1024 * 1024);
+            _ = try child.wait(io);
+        }
     }
 }
 
@@ -286,8 +283,8 @@ pub fn main(init: process.Init) !void {
     };
 
     std.debug.print("ccsh> ", .{});
-    while (stdin.takeDelimiter('\n')) |line| {
-        const ln: []u8 = line.?;
+    while (true) {
+        const ln: []u8 = try stdin.takeDelimiter('\n') orelse return;
         if (mem.count(u8, ln, "|") > 0) {
             try executePipeCmds(alloc, io, ln);
             std.debug.print("ccsh> ", .{});
@@ -375,7 +372,7 @@ pub fn main(init: process.Init) !void {
                 defer alloc.free(exe_dir);
                 try restoreDefaultSignalHandlers();
 
-                const res = try process.run(alloc, io, .{ .argv = argv });
+                const res: process.RunResult = try process.run(alloc, io, .{ .argv = argv });
 
                 try stdout.writeAll(res.stdout);
                 try stderr.writeAll(res.stderr);
@@ -397,7 +394,7 @@ pub fn main(init: process.Init) !void {
                 //     try res.spawn();
                 // }
                 // _ = try res.wait();
-                // try setupSignalHandlers();
+                try setupSignalHandlers();
             } else {
                 std.debug.print("{s}: command not found\n", .{cmd});
             }
@@ -405,8 +402,5 @@ pub fn main(init: process.Init) !void {
             try stderr.flush();
         }
         std.debug.print("ccsh> ", .{});
-    } else |err| switch (err) {
-        // error.EndOfStream => {},
-        else => std.debug.print("err: {}\n", .{err}),
     }
 }
