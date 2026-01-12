@@ -2,6 +2,7 @@ const std: type = @import("std");
 const syscall: type = @import("syscallmappings.zig");
 const callargs: type = @import("syscallargs.zig");
 
+const mem: type = std.mem;
 const posix: type = std.posix;
 const linux: type = std.os.linux;
 const Io: type = std.Io;
@@ -46,14 +47,14 @@ const SyscallStats: type = struct {
     total_time: u64 = 0,
 };
 
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: process.Init) !void {
     var degpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = degpa.deinit();
-    const dealloc: std.mem.Allocator = degpa.allocator();
+    const dealloc: mem.Allocator = degpa.allocator();
 
     var alloc: std.heap.ArenaAllocator = .init(dealloc);
     defer alloc.deinit();
-    const gpa: std.mem.Allocator = alloc.allocator();
+    const gpa: mem.Allocator = alloc.allocator();
 
     var io_threaded: Io.Threaded = .init(gpa, .{ .environ = init.minimal.environ });
     defer io_threaded.deinit();
@@ -73,7 +74,7 @@ pub fn main(init: std.process.Init) !void {
     var print_stat: bool = false;
     var external_process: []const [:0]const u8 = undefined;
 
-    if (std.mem.eql(u8, ar[1], "-c")) {
+    if (mem.eql(u8, ar[1], "-c")) {
         get_stat = ar[1];
         print_stat = true;
         external_process = ar[2..];
@@ -81,7 +82,7 @@ pub fn main(init: std.process.Init) !void {
         external_process = ar[1..];
     }
 
-    const pid: std.posix.fd_t = @intCast(linux.fork());
+    const pid: posix.fd_t = @intCast(linux.fork());
 
     switch (pid) {
         -1 => {
@@ -92,7 +93,7 @@ pub fn main(init: std.process.Init) !void {
         0 => {
             _ = linux.ptrace(linux.PTRACE.TRACEME, pid, 0, 0, 0);
             _ = linux.kill(linux.getpid(), linux.SIG.STOP);
-            return std.process.replace(io, .{ .argv = external_process });
+            return process.replace(io, .{ .argv = external_process });
         },
         else => {
             var status: u32 = 0;
@@ -180,7 +181,7 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-fn displaystat(gpa: std.mem.Allocator, stats_map: *std.AutoHashMap(i64, SyscallStats), wr: *std.Io.Writer) !void {
+fn displaystat(gpa: mem.Allocator, stats_map: *std.AutoHashMap(i64, SyscallStats), wr: *Io.Writer) !void {
     // Create a list of syscall entries
     var entries: std.ArrayList(struct { syscall_num: i64, stats: SyscallStats }) = .empty;
     defer entries.deinit(gpa);

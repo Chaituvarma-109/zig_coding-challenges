@@ -84,13 +84,27 @@ pub fn accessModeToString(mode: u64) ![]const u8 {
 }
 
 pub fn mmapProtToString(prot: u64) []const u8 {
-    if (prot == linux.PROT.NONE) return "PROT_NONE";
-    if (prot == linux.PROT.READ) return "PROT_READ";
-    if (prot == (linux.PROT.READ | linux.PROT.WRITE)) return "PROT_READ|PROT_WRITE";
-    if (prot == (linux.PROT.READ | linux.PROT.EXEC)) return "PROT_READ|PROT_EXEC";
-    if (prot == (linux.PROT.READ | linux.PROT.WRITE | linux.PROT.EXEC)) return "PROT_READ|PROT_WRITE|PROT_EXEC";
-    if (prot == (linux.PROT.WRITE)) return "PROT_WRITE";
-    if (prot == (linux.PROT.EXEC)) return "PROT_EXEC";
+    const NONE: u64 = 0x0;
+    const READ: u64 = 0x1;
+    const WRITE: u64 = 0x2;
+    const EXEC: u64 = 0x4;
+    const SEM: u64 = 0x8;
+    const GROWSDOWN: u64 = 0x01000000;
+    const GROWSUP: u64 = 0x02000000;
+
+    if (prot == NONE) return "PROT_NONE";
+    if (prot == READ) return "PROT_READ";
+    if (prot == WRITE) return "PROT_WRITE";
+    if (prot == EXEC) return "PROT_EXEC";
+    if (prot == (READ | WRITE)) return "PROT_READ|PROT_WRITE";
+    if (prot == (READ | EXEC)) return "PROT_READ|PROT_EXEC";
+    if (prot == (WRITE | EXEC)) return "PROT_WRITE|PROT_EXEC";
+    if (prot == (READ | WRITE | EXEC)) return "PROT_READ|PROT_WRITE|PROT_EXEC";
+    if (prot == (READ | WRITE | SEM)) return "PROT_READ|PROT_WRITE|PROT_SEM";
+    if (prot == (READ | WRITE | EXEC | SEM)) return "PROT_READ|PROT_WRITE|PROT_EXEC|PROT_SEM";
+    if (prot & GROWSDOWN != 0) return "PROT_GROWSDOWN";
+    if (prot & GROWSUP != 0) return "PROT_GROWSUP";
+
     return "PROT_???";
 }
 
