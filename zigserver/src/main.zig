@@ -20,15 +20,8 @@ const Request = struct {
     }
 };
 
-// init: std.process.Init.Minimal
 pub fn main(init: std.process.Init) !void {
-    const io = init.io;
-
-    // below is another way to implement io
-    // const page_alloc: Allocator = std.heap.page_allocator;
-    // var io_threaded: Io.Threaded = .init(page_alloc, .{ .concurrent_limit = .limited(4), .environ = init.environ });
-    // defer io_threaded.deinit();
-    // var io: Io = io_threaded.io();
+    const io: Io = init.io;
 
     const address: net.IpAddress = try .parse("127.0.0.1", 8080);
     var listener: net.Server = try address.listen(io, .{
@@ -36,22 +29,25 @@ pub fn main(init: std.process.Init) !void {
     });
     defer listener.deinit(io);
 
+    var group: Io.Group = .init;
+    defer group.cancel(io);
+
     while (true) {
-        const conn: net.Stream = listener.accept(io) catch |err| {
+        var conn: net.Stream = listener.accept(io) catch |err| {
             std.debug.print("Error accepting connection: {any}\n", .{err});
             continue;
         };
+        errdefer conn.close(io);
 
-        var fut = try io.concurrent(handleRequest, .{ conn, io });
-        _ = fut.await(io);
+        try group.concurrent(io, handleRequest, .{ &conn, io });
     }
 }
 
-fn handleRequest(conn: net.Stream, io: Io) void {
+fn handleRequest(conn: *net.Stream, io: Io) void {
     defer conn.close(io);
 
-    var r: Io.net.Stream.Reader = conn.reader(io, &.{});
-    var w: Io.net.Stream.Writer = conn.writer(io, &.{});
+    var r: Io.net.Stream.Reader = conn.*.reader(io, &.{});
+    var w: Io.net.Stream.Writer = conn.*.writer(io, &.{});
 
     const reader: *Io.Reader = &r.interface;
     const writer: *Io.Writer = &w.interface;
