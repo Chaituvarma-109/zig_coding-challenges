@@ -49,32 +49,17 @@ const Wc = struct {
     words: usize = 0,
     chars: usize = 0,
     bytes: usize = 0,
-    fd: std.os.linux.fd_t = std.os.linux.STDIN_FILENO,
 
-    fn count(config: Config) !Wc {
+    fn count(r: *Io.Reader) !Wc {
         var wc = Wc{};
         var in_word: bool = false;
 
-        if (config.filename) |f_name| {
-            const file_name: [*:0]const u8 = @ptrCast(f_name);
-            wc.fd = @intCast(std.os.linux.open(file_name, .{ .ACCMODE = .RDONLY }, 0));
-        }
-        defer _ = std.os.linux.close(wc.fd);
+        while (try r.takeDelimiter('\n')) |l| {
+            wc.lines += 1;
+            wc.bytes += l.len + 1;
 
-        _ = std.os.linux.fadvise(wc.fd, 0, 0, std.os.linux.POSIX_FADV.SEQUENTIAL);
-        var buff: [512 * 1024]u8 = undefined;
-
-        while (true) {
-            const n: usize = std.os.linux.read(wc.fd, &buff, buff.len);
-            if (n == 0) break;
-
-            const data: []const u8 = buff[0..n];
-            wc.bytes += data.len;
-
-            for (data) |char| {
+            for (l) |char| {
                 if ((char & 0xc0) != 0x80) wc.chars += 1;
-
-                if (char == '\n') wc.lines += 1;
 
                 const ws: bool = std.ascii.isWhitespace(char);
                 if (!ws and !in_word) {
@@ -84,6 +69,8 @@ const Wc = struct {
                     in_word = false;
                 }
             }
+            wc.chars += 1;
+            in_word = false;
         }
         return wc;
     }
@@ -93,25 +80,46 @@ pub fn main(init: std.process.Init) !void {
     const args: std.process.Args = init.minimal.args;
 
     const config = try Config.init(args);
-    const count = try Wc.count(config);
-
-    var io_threaded: Io.Threaded = .init_single_threaded;
-    const io: Io = io_threaded.ioBasic();
+    const io = init.io;
 
     var wbuff: [256]u8 = undefined;
-    const file = Io.File.stdout();
-    var fwr = file.writer(io, &wbuff);
+    var fwr: Io.File.Writer = .init(.stdout(), io, &wbuff);
     const wr: *Io.Writer = &fwr.interface;
 
-    if (config.show_lines) try wr.print("{d} ", .{count.lines});
-    if (config.show_words) try wr.print("{d} ", .{count.words});
-    if (config.show_chars) try wr.print("{d} ", .{count.chars});
-    if (config.show_bytes) try wr.print("{d} ", .{count.bytes});
+    var file_name: []const u8 = undefined;
+    if (config.filename) |f| file_name = f;
+
+    const file = try Io.Dir.cwd().openFile(io, file_name, .{ .mode = .read_only });
+    defer file.close(io);
+
+    var buff: [512 * 1024]u8 = undefined;
+    var fr: Io.File.Reader = .init(file, io, &buff);
+    const r = &fr.interface;
+
+    const count = try Wc.count(r);
+
+    if (config.show_lines) {
+        try wr.print("{d} ", .{count.lines});
+        try wr.flush();
+    }
+    if (config.show_words) {
+        try wr.print("{d} ", .{count.words});
+        try wr.flush();
+    }
+    if (config.show_chars) {
+        try wr.print("{d} ", .{count.chars});
+        try wr.flush();
+    }
+    if (config.show_bytes) {
+        try wr.print("{d} ", .{count.bytes});
+        try wr.flush();
+    }
 
     if (config.filename) |f| {
         try wr.print("{s}\n", .{f});
+        try wr.flush();
     } else {
         try wr.print("\n", .{});
+        try wr.flush();
     }
-    try wr.flush();
 }
