@@ -109,19 +109,18 @@ pub fn readline(alloc: mem.Allocator, io: Io, prompt: []const u8, env: std.proce
     var line_buff: std.ArrayList(u8) = .empty;
     errdefer line_buff.deinit(alloc);
 
-    const infile: Io.File = try Io.Dir.openFile(.cwd(), io, "/dev/tty", .{ .mode = .read_write });
-    defer infile.close(io);
+    const stdin: Io.File = .stdin();
 
     var buff: [1]u8 = undefined;
-    var fr = infile.reader(io, &buff);
+    var fr: Io.File.Reader = .init(stdin, io, &buff);
     const r = &fr.interface;
 
     var wbuff: [1024]u8 = undefined;
-    var fwr = infile.writer(io, &wbuff);
+    var fwr: Io.File.Writer = .init(stdin, io, &wbuff);
     const stdout = &fwr.interface;
 
-    const term: posix.termios = try enableRawMode(infile);
-    defer disableRawMode(infile, term) catch {};
+    const term: posix.termios = try enableRawMode(stdin);
+    defer disableRawMode(stdin, term) catch {};
 
     var tab_count: usize = 0;
     var arr: usize = 0;
@@ -183,7 +182,12 @@ pub fn readline(alloc: mem.Allocator, io: Io, prompt: []const u8, env: std.proce
             std.ascii.control_code.lf, std.ascii.control_code.cr => {
                 try stdout.writeAll("\n");
                 try stdout.flush();
-                return try line_buff.toOwnedSlice(alloc);
+                if (line_buff.items.len != 0) {
+                    return try line_buff.toOwnedSlice(alloc);
+                } else {
+                    try stdout.writeAll(prompt);
+                    try stdout.flush();
+                }
             },
             std.ascii.control_code.ht => {
                 tab_count += 1;

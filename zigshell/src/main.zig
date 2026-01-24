@@ -79,8 +79,7 @@ pub fn main(init: process.Init) !void {
     defer alloc.free(buff);
 
     var wbuf: [1024]u8 = undefined;
-    const stdout_f = Io.File.stdout();
-    var stdout_writer = stdout_f.writerStreaming(io, &wbuf);
+    var stdout_writer: Io.File.Writer = .init(.stdout(), io, &wbuf);
     const stdout = &stdout_writer.interface;
 
     completion_path = env.getPosix("PATH");
@@ -107,7 +106,7 @@ pub fn main(init: process.Init) !void {
     }
 
     while (true) {
-        const ln: []const u8 = try rdln.readline(alloc, io, "$ ", env) orelse unreachable;
+        const ln: []const u8 = try rdln.readline(alloc, io, "ccsh> ", env) orelse unreachable;
         defer alloc.free(ln);
 
         const line: []u8 = try alloc.dupe(u8, ln);
