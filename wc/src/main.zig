@@ -100,26 +100,22 @@ pub fn main(init: std.process.Init) !void {
 
     if (config.show_lines) {
         try wr.print("{d} ", .{count.lines});
-        try wr.flush();
     }
     if (config.show_words) {
         try wr.print("{d} ", .{count.words});
-        try wr.flush();
     }
     if (config.show_chars) {
         try wr.print("{d} ", .{count.chars});
-        try wr.flush();
     }
     if (config.show_bytes) {
         try wr.print("{d} ", .{count.bytes});
-        try wr.flush();
     }
 
     if (config.filename) |f| {
         try wr.print("{s}\n", .{f});
-        try wr.flush();
     } else {
         try wr.print("\n", .{});
-        try wr.flush();
     }
+
+    try wr.flush();
 }
