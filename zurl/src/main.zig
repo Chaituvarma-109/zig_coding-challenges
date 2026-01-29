@@ -14,8 +14,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const io: Io = io_threaded.io();
 
     var wbuff: [1024]u8 = undefined;
-    const f: Io.File = .stdout();
-    var fwr = f.writer(io, &wbuff);
+    var fwr: Io.File.Writer = .init(.stdout(), io, &wbuff);
     const wr: *Io.Writer = &fwr.interface;
 
     var client: http.Client = .{ .allocator = page_alloc, .io = io };
@@ -153,14 +152,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var decompress_buffer: [std.compress.flate.max_window_len]u8 = undefined;
     const body_reader: *Io.Reader = res.readerDecompressing(&transfer_buffer, &decompress, &decompress_buffer);
 
-    // var fbuff: [1024]u8 = undefined;
-    // var resp_wr: Io.Writer = .fixed(&fbuff);
-
     _ = body_reader.streamRemaining(wr) catch |err| switch (err) {
         else => return err,
     };
 
-    // const bytes: []u8 = resp_wr.buffered();
-    // try resp_wr.writeAll(bytes);
     try wr.flush();
 }
