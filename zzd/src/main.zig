@@ -53,7 +53,8 @@ pub fn main(init: process.Init.Minimal) !void {
     const args: process.Args = init.args;
     const arg: Config = try Config.init(args, pga);
 
-    var io_threaded: Io.Threaded = .init_single_threaded;
+    var io_threaded: Io.Threaded = .init(pga, .{ .environ = init.environ });
+    defer io_threaded.deinit();
     const io: Io = io_threaded.io();
 
     const f: File = try Io.Dir.openFile(.cwd(), io, arg.file, .{ .mode = .read_only });
@@ -67,9 +68,7 @@ pub fn main(init: process.Init.Minimal) !void {
     const buf: []u8 = try Io.Dir.readFile(.cwd(), io, arg.file, rbuff);
 
     var wbuff: [1024]u8 = undefined;
-    var stdout: File = .stdout();
-    defer stdout.close(io);
-    var fw: File.Writer = stdout.writer(io, &wbuff);
+    var fw: File.Writer = .init(.stdout(), io, &wbuff);
     const fwr = &fw.interface;
 
     var buff: [1024]u8 = undefined;
@@ -82,7 +81,7 @@ pub fn main(init: process.Init.Minimal) !void {
     }
 }
 
-fn dumpHex(buff: []u8, args: Config, tty: std.Io.Terminal) !void {
+fn dumpHex(buff: []u8, args: Config, tty: Io.Terminal) !void {
     const bw = tty.writer;
 
     const chunklen: usize = args.chunklen;
@@ -92,7 +91,7 @@ fn dumpHex(buff: []u8, args: Config, tty: std.Io.Terminal) !void {
     const start: usize = args.seek;
     const end: usize = @max(limit, limit + args.seek);
 
-    var chunks = std.mem.window(u8, buff[start..end], columns, columns);
+    var chunks = mem.window(u8, buff[start..end], columns, columns);
     var line_offset: usize = 0;
 
     while (chunks.next()) |window| {
@@ -104,16 +103,22 @@ fn dumpHex(buff: []u8, args: Config, tty: std.Io.Terminal) !void {
         // 2. Print the bytes.
         var lit = mem.window(u8, window, chunklen, chunklen);
         while (lit.next()) |chunk| {
-            try tty.setColor(.green);
             if (args.endian) {
                 var iter = mem.reverseIterator(chunk);
                 while (iter.next()) |byte| {
                     try bw.print("{x:0>2}", .{byte});
                 }
             } else {
-                try bw.printHex(chunk, .lower);
+                for (chunk) |value| {
+                    if (std.ascii.isPrint(value)) {
+                        try tty.setColor(.green);
+                        try bw.print("{x:0>2}", .{value});
+                        try tty.setColor(.reset);
+                    } else {
+                        try bw.print("{x:0>2}", .{value});
+                    }
+                }
             }
-            try tty.setColor(.reset);
             try bw.writeByte(' ');
         }
 
