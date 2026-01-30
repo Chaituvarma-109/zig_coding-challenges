@@ -1,0 +1,6 @@
+[
+  {
+    "label": "zson build",
+    "command": "zig build",
+  },
+]

@@ -1,0 +1,10 @@
+[
+  {
+    "adapter": "GDB",
+    "label": "zson debug",
+    "request": "launch",
+    "program": "zig-out/bin/zsonparser",
+    "args": ["tests/step4/valid.json"],
+    "build": "zson build",
+  },
+]
