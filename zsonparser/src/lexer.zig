@@ -7,7 +7,6 @@ const TokenType = enum {
     object_end,
     array_start,
     array_end,
-    quote,
     string,
     colon,
     comma,
@@ -50,10 +49,7 @@ pub fn lexe(alloc: mem.Allocator, bytes: []u8) !std.MultiArrayList(Result) {
             },
             '"' => {
                 i += 1;
-                const idx: usize = mem.find(u8, bytes[i..], "\"") orelse {
-                    std.log.err("tok: {s}\n", .{bytes[i..]});
-                    return error.NoQuotation;
-                };
+                const idx: usize = mem.find(u8, bytes[i..], "\"") orelse return error.NoQuotation;
                 const end: usize = i + idx;
 
                 try tokens_arr_lst.append(alloc, .{ .token = .string, .start = i, .end = end });
@@ -84,14 +80,14 @@ pub fn lexe(alloc: mem.Allocator, bytes: []u8) !std.MultiArrayList(Result) {
                 continue;
             },
             '-', '0'...'9' => {
-                var end: usize = 1;
-                for (bytes[i..]) |value| {
-                    if (value != '-' and !std.ascii.isDigit(value)) {
-                        end += 1;
-                    }
+                var end: usize = i + 1;
+                while (end < bytes.len) : (end += 1) {
+                    const ch = bytes[end];
+                    if (ch != '-' and ch != '.' and !std.ascii.isDigit(ch)) break;
                 }
-                try tokens_arr_lst.append(alloc, .{ .token = .number, .start = i, .end = i + end });
-                i += end;
+
+                try tokens_arr_lst.append(alloc, .{ .token = .number, .start = i, .end = end });
+                i = end;
             },
             else => {
                 std.log.err("err tok: {c}\n", .{char});
