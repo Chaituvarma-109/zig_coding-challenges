@@ -2,6 +2,7 @@ const std = @import("std");
 const Io = std.Io;
 
 const lex = @import("lexer.zig");
+const parse = @import("parser.zig");
 
 pub fn main(init: std.process.Init) !void {
     const arena: std.mem.Allocator = init.arena.allocator();
@@ -37,9 +38,11 @@ pub fn main(init: std.process.Init) !void {
         try stdout_writer.flush();
     }
 
-    for (r.items(.token), r.items(.start), r.items(.end)) |tok, s, e| {
-        const str = content[s..e];
-        try stdout_writer.print("token: {any}, string: {s}\n", .{ tok, str });
-        try stdout_writer.flush();
+    const res: [][]const u8 = try parse.parse(arena, r, content, stdout_writer);
+
+    for (res) |val| {
+        try stdout_writer.print("{s}", .{val});
     }
+    try stdout_writer.writeAll("\n");
+    try stdout_writer.flush();
 }

@@ -2,7 +2,7 @@ const std = @import("std");
 const Io = std.Io;
 const mem = std.mem;
 
-const TokenType = enum {
+pub const TokenType = enum {
     object_start,
     object_end,
     array_start,
@@ -30,50 +30,60 @@ pub fn lexe(alloc: mem.Allocator, bytes: []u8) !std.MultiArrayList(Result) {
     while (i < bytes.len) {
         const char: u8 = bytes[i];
 
-        switch (char) {
+        const res = blk: switch (char) {
             '{' => {
-                try tokens_arr_lst.append(alloc, .{ .token = .object_start, .start = i, .end = i + 1 });
+                const r = Result{ .token = .object_start, .start = i, .end = i + 1 };
                 i += 1;
+                break :blk r;
             },
             '}' => {
-                try tokens_arr_lst.append(alloc, .{ .token = .object_end, .start = i, .end = i + 1 });
+                const r = Result{ .token = .object_end, .start = i, .end = i + 1 };
                 i += 1;
+                break :blk r;
             },
             '[' => {
-                try tokens_arr_lst.append(alloc, .{ .token = .array_start, .start = i, .end = i + 1 });
+                const r = Result{ .token = .array_start, .start = i, .end = i + 1 };
                 i += 1;
+                break :blk r;
             },
             ']' => {
-                try tokens_arr_lst.append(alloc, .{ .token = .array_end, .start = i, .end = i + 1 });
+                const r = Result{ .token = .array_end, .start = i, .end = i + 1 };
                 i += 1;
+                break :blk r;
             },
             '"' => {
                 i += 1;
                 const idx: usize = mem.find(u8, bytes[i..], "\"") orelse return error.NoQuotation;
                 const end: usize = i + idx;
 
-                try tokens_arr_lst.append(alloc, .{ .token = .string, .start = i, .end = end });
+                const r = Result{ .token = .string, .start = i, .end = end };
                 i += idx + 1;
+                break :blk r;
             },
             ':' => {
-                try tokens_arr_lst.append(alloc, .{ .token = .colon, .start = i, .end = i + 1 });
+                const r = Result{ .token = .colon, .start = i, .end = i + 1 };
                 i += 1;
+                break :blk r;
             },
             ',' => {
-                try tokens_arr_lst.append(alloc, .{ .token = .comma, .start = i, .end = i + 1 });
+                const r = Result{ .token = .comma, .start = i, .end = i + 1 };
                 i += 1;
+                break :blk r;
             },
             'n' => {
-                try tokens_arr_lst.append(alloc, .{ .token = .null, .start = i, .end = i + 4 });
+                const r = Result{ .token = .null, .start = i, .end = i + 4 };
                 i += 4;
+                break :blk r;
             },
             't' => {
-                try tokens_arr_lst.append(alloc, .{ .token = .true, .start = i, .end = i + 4 });
+                const r = Result{ .token = .true, .start = i, .end = i + 4 };
                 i += 4;
+                break :blk r;
             },
             'f' => {
-                try tokens_arr_lst.append(alloc, .{ .token = .false, .start = i, .end = i + 5 });
+                const r = Result{ .token = .false, .start = i, .end = i + 5 };
                 i += 5;
+                break :blk r;
             },
             '\n', '\r', '\t', ' ' => {
                 i += 1;
@@ -86,14 +96,17 @@ pub fn lexe(alloc: mem.Allocator, bytes: []u8) !std.MultiArrayList(Result) {
                     if (ch != '-' and ch != '.' and !std.ascii.isDigit(ch)) break;
                 }
 
-                try tokens_arr_lst.append(alloc, .{ .token = .number, .start = i, .end = end });
+                const r = Result{ .token = .number, .start = i, .end = end };
                 i = end;
+                break :blk r;
             },
             else => {
                 std.log.err("err tok: {c}\n", .{char});
                 return error.InvalidToken;
             },
-        }
+        };
+
+        try tokens_arr_lst.append(alloc, res);
     }
 
     return tokens_arr_lst;
