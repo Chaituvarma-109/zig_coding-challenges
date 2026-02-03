@@ -4,8 +4,6 @@ const http = std.http;
 const mem = std.mem;
 const Io = std.Io;
 
-const body_max_size: usize = 8192;
-
 pub fn main(init: std.process.Init.Minimal) !void {
     const args: std.process.Args = init.args;
     const page_alloc: mem.Allocator = std.heap.page_allocator;
@@ -58,23 +56,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
         return;
     };
 
-    var req_headers: http.Client.Request.Headers = .{};
-    switch (method) {
-        .POST, .PUT => req_headers = .{
-            .host = .{ .override = uri.host.?.percent_encoded },
-            .user_agent = .{ .override = "zurl" },
-            .connection = .{ .override = "close" },
-            .content_type = .{ .override = app_type },
+    const req_headers: http.Client.Request.Headers = .{
+        .host = .{ .override = uri.host.?.percent_encoded },
+        .user_agent = .{ .override = "zurl" },
+        .connection = .{ .override = "close" },
+        .content_type = switch (method) {
+            .POST, .PUT => .{ .override = app_type },
+            else => .default,
         },
-        else => req_headers = .{
-            .host = .{ .override = uri.host.?.percent_encoded },
-            .user_agent = .{ .override = "zurl" },
-            .connection = .{ .override = "close" },
-        },
-    }
-
-    const extra_headers = [_]http.Header{
-        .{ .name = "Accept", .value = "*/*" },
     };
 
     var redirect_buff: [1024]u8 = undefined;
@@ -82,7 +71,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var req: http.Client.Request = client.request(method, uri, .{
         .keep_alive = false,
         .headers = req_headers,
-        .extra_headers = &extra_headers,
+        .extra_headers = &[_]http.Header{.{ .name = "Accept", .value = "*/*" }},
     }) catch |err| {
         try wr.print("Unable to open the request: {}\n", .{err});
         try wr.flush();
@@ -141,7 +130,6 @@ pub fn main(init: std.process.Init.Minimal) !void {
         var iter: http.HeaderIterator = res.head.iterateHeaders();
         while (iter.next()) |header| {
             try wr.print("< {s}:{s}\n", .{ header.name, header.value });
-            try wr.flush();
         }
         try wr.print("< \n", .{});
         try wr.flush();
