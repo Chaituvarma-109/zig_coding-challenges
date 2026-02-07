@@ -61,8 +61,7 @@ pub fn main(init: process.Init) !void {
     const io: Io = io_threaded.ioBasic();
 
     var buff: [1024]u8 = undefined;
-    const f: Io.File = .stdout();
-    var fwr: Io.File.Writer = f.writer(io, &buff);
+    var fwr: Io.File.Writer = .init(.stdout(), io, &buff);
     const wr: *Io.Writer = &fwr.interface;
 
     const args: process.Args = init.minimal.args;
@@ -104,7 +103,7 @@ pub fn main(init: process.Init) !void {
 
             var stats_map: std.AutoHashMap(i64, SyscallStats) = .init(gpa);
             defer stats_map.deinit();
-            var entry_time: std.time.Instant = undefined;
+            var entry_time: Io.Timestamp = undefined;
 
             while (true) {
                 _ = linux.ptrace(linux.PTRACE.SYSCALL, pid, 0, 0, 0);
@@ -127,7 +126,7 @@ pub fn main(init: process.Init) !void {
                     if (syscall_info.isEntry()) {
                         curr_syscall = @intCast(syscall_info.data.entry.nr);
                         const syscall_args: [6]u64 = syscall_info.data.entry.args;
-                        entry_time = try .now();
+                        entry_time = .now(io, .cpu_process);
 
                         if (!print_stat) {
                             const syscall_name: []const u8 = syscall.getSysCallName(curr_syscall);
@@ -137,9 +136,7 @@ pub fn main(init: process.Init) !void {
                         }
                     } else if (syscall_info.isExit()) {
                         const ret_val: i64 = syscall_info.data.exit.rval;
-                        var exit_time: std.time.Instant = try .now();
-
-                        const duration: u64 = exit_time.since(entry_time);
+                        const duration: u64 = @intCast(entry_time.untilNow(io, .cpu_process).toNanoseconds());
 
                         // Update statistics
                         var stats: SyscallStats = stats_map.get(curr_syscall) orelse .{};
