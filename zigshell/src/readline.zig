@@ -50,7 +50,7 @@ fn handleCompletions(alloc: mem.Allocator, io: Io, env: std.process.Environ, cmd
     while (path_iter.next()) |dir_path| {
         if (dir_path.len == 0) continue;
 
-        var directory: Io.Dir = try Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true });
+        var directory: Io.Dir = try .openDirAbsolute(io, dir_path, .{ .iterate = true });
         defer directory.close(io);
 
         var iter: Io.Dir.Iterator = directory.iterate();

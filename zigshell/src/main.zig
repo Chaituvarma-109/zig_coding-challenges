@@ -276,7 +276,7 @@ fn executePipeCmds(alloc: mem.Allocator, io: Io, inp: []const u8, buff: []u8, st
                 // Execute external command
                 const exec_error = process.replace(io, .{ .argv = args });
                 if (exec_error != error.Success) {
-                    std.debug.print("execv failed for {s}: {}\n", .{ cmd, exec_error });
+                    std.log.err("execv failed for {s}: {}\n", .{ cmd, exec_error });
                     process.exit(1);
                 }
             }
@@ -324,10 +324,8 @@ fn executeWithRedirection(alloc: mem.Allocator, io: Io, cmd: []const u8, argv: [
     else
         .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true };
 
-    //0o666
     const fd: posix.fd_t = posix.openat(posix.AT.FDCWD, redir.filename, flags, 0o666) catch |err| {
-        try stdout.print("Failed to open {s}: {}\n", .{ redir.filename, err });
-        try stdout.flush();
+        std.log.err("Failed to open {s}: {}\n", .{ redir.filename, err });
         return;
     };
     defer posix.close(fd);
@@ -400,8 +398,8 @@ fn executeBuiltin(alloc: mem.Allocator, io: Io, cmd: []const u8, argv: [][]const
         };
     } else if (mem.eql(u8, cmd, "pwd")) {
         var pbuff: [Io.Dir.max_path_bytes]u8 = undefined;
-        const cwd: []u8 = try std.process.getCwd(&pbuff);
-        try stdout.print("{s}\n", .{cwd});
+        const n: usize = try std.process.currentPath(io, &pbuff);
+        try stdout.print("{s}\n", .{pbuff[0..n]});
         try stdout.flush();
     } else if (mem.eql(u8, cmd, "echo")) {
         try handleEcho(argv, stdout);
