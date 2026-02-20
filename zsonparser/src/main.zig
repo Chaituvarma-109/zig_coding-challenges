@@ -16,7 +16,7 @@ pub fn main(init: std.process.Init) !void {
 
     const args: []const [:0]const u8 = try init.minimal.args.toSlice(arena);
     if (args.len <= 1) {
-        std.log.err("Invalid arg, maybe filename missing\n", .{});
+        std.log.err("Invalid arg, maybe filename missing", .{});
         return;
     }
     file_name = args[1];
@@ -34,11 +34,11 @@ pub fn main(init: std.process.Init) !void {
     defer r.deinit(arena);
 
     if (r.len == 0) {
-        try stdout_writer.print("Invalid json\n", .{});
+        try stdout_writer.print("Invalid json", .{});
         try stdout_writer.flush();
     }
 
-    const res: [][]const u8 = try parse.parse(arena, r, content, stdout_writer);
+    const res: [][]const u8 = try parse.parse(arena, r, content);
 
     for (res) |val| {
         try stdout_writer.print("{s}", .{val});

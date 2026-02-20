@@ -5,8 +5,7 @@ const lex = @import("lexer.zig");
 const Result = lex.Result;
 const TokenType = lex.TokenType;
 
-pub fn parse(alloc: std.mem.Allocator, arr_lst: std.MultiArrayList(Result), content: []const u8, stdout_writer: *Io.Writer) ![][]const u8 {
-    _ = stdout_writer;
+pub fn parse(alloc: std.mem.Allocator, arr_lst: std.MultiArrayList(Result), content: []const u8) ![][]const u8 {
     var pars_lst: std.ArrayList([]const u8) = .empty;
     errdefer pars_lst.deinit(alloc);
 
