@@ -48,17 +48,9 @@ const SyscallStats: type = struct {
 };
 
 pub fn main(init: process.Init) !void {
-    var degpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = degpa.deinit();
-    const dealloc: mem.Allocator = degpa.allocator();
+    const gpa: mem.Allocator = init.arena.allocator();
 
-    var alloc: std.heap.ArenaAllocator = .init(dealloc);
-    defer alloc.deinit();
-    const gpa: mem.Allocator = alloc.allocator();
-
-    var io_threaded: Io.Threaded = .init(gpa, .{ .environ = init.minimal.environ });
-    defer io_threaded.deinit();
-    const io: Io = io_threaded.ioBasic();
+    const io: Io = init.io;
 
     var buff: [1024]u8 = undefined;
     var fwr: Io.File.Writer = .init(.stdout(), io, &buff);
@@ -67,7 +59,7 @@ pub fn main(init: process.Init) !void {
     const args: process.Args = init.minimal.args;
     const ar: []const [:0]const u8 = try args.toSlice(gpa);
 
-    std.debug.assert(ar.len >= 2);
+    if (ar.len < 2) return error.InvalidArguments;
 
     var get_stat: [:0]const u8 = undefined;
     var print_stat: bool = false;
@@ -81,7 +73,7 @@ pub fn main(init: process.Init) !void {
         external_process = ar[1..];
     }
 
-    const pid: posix.fd_t = @intCast(linux.fork());
+    const pid: posix.pid_t = @intCast(linux.fork());
 
     switch (pid) {
         -1 => {
