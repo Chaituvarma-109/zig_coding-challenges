@@ -9,8 +9,7 @@ pub fn main(init: process.Init.Minimal) !void {
     const io: std.Io = io_threaded.io();
 
     var buff: [1024]u8 = undefined;
-    var f: std.Io.File = .stdout();
-    var fwr = f.writer(io, &buff);
+    var fwr: std.Io.File.Writer = .init(.stdout(), io, &buff);
     const wr: *std.Io.Writer = &fwr.interface;
 
     var arg_iter = args.iterate();
