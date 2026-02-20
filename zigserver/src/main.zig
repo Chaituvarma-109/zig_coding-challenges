@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
 
     while (true) {
         var conn: net.Stream = listener.accept(io) catch |err| {
-            std.debug.print("Error accepting connection: {any}\n", .{err});
+            std.log.err("Error accepting connection: {any}\n", .{err});
             continue;
         };
         errdefer conn.close(io);
@@ -56,7 +56,7 @@ fn handleRequest(conn: *net.Stream, io: Io) void {
     var resp_wr: Io.Writer = .fixed(&fbuff);
 
     _ = reader.stream(&resp_wr, .unlimited) catch |err| {
-        std.log.err("err: {any}\n", .{err});
+        std.log.err("{any}\n", .{err});
         return;
     };
 
@@ -76,11 +76,11 @@ fn handleRequest(conn: *net.Stream, io: Io) void {
             return;
         };
         writer.writeAll(resp) catch |err| {
-            std.log.err("err: {any}\n", .{err});
+            std.log.err("{any}\n", .{err});
             return;
         };
         writer.flush() catch |err| {
-            std.log.err("err: {any}\n", .{err});
+            std.log.err("{any}\n", .{err});
             return;
         };
     } else {
@@ -94,7 +94,7 @@ fn handleRequest(conn: *net.Stream, io: Io) void {
             return;
         };
         writer.flush() catch |err| {
-            std.log.err("err: {any}\n", .{err});
+            std.log.err("{any}\n", .{err});
             return;
         };
     }
