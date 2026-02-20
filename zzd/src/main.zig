@@ -47,15 +47,13 @@ const Config = struct {
     }
 };
 
-pub fn main(init: process.Init.Minimal) !void {
-    const pga: mem.Allocator = std.heap.page_allocator;
+pub fn main(init: process.Init) !void {
+    const pga: mem.Allocator = init.arena.allocator();
 
-    const args: process.Args = init.args;
+    const args: process.Args = init.minimal.args;
     const arg: Config = try Config.init(args, pga);
 
-    var io_threaded: Io.Threaded = .init(pga, .{ .environ = init.environ });
-    defer io_threaded.deinit();
-    const io: Io = io_threaded.io();
+    const io: Io = init.io;
 
     const f: File = try Io.Dir.openFile(.cwd(), io, arg.file, .{ .mode = .read_only });
     defer f.close(io);
