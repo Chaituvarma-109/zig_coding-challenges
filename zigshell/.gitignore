@@ -2,3 +2,4 @@
 zig-out/
 .shell_history
 .idea/
+test.txt
