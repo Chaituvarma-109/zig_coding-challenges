@@ -4,12 +4,12 @@ const http = std.http;
 const mem = std.mem;
 const Io = std.Io;
 
-pub fn main(init: std.process.Init.Minimal) !void {
-    const args: std.process.Args = init.args;
-    const page_alloc: mem.Allocator = std.heap.page_allocator;
+pub fn main(init: std.process.Init) !void {
+    const args: std.process.Args = init.minimal.args;
 
-    var io_threaded: Io.Threaded = .init_single_threaded;
-    const io: Io = io_threaded.io();
+    const page_alloc: mem.Allocator = init.arena.allocator();
+
+    const io: Io = init.io;
 
     var wbuff: [1024]u8 = undefined;
     var fwr: Io.File.Writer = .init(.stdout(), io, &wbuff);
