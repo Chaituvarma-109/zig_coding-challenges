@@ -262,8 +262,8 @@ fn executePipeCmds(alloc: mem.Allocator, io: Io, inp: []const u8, buff: []u8, st
 
             // Close all pipe file descriptors in child
             for (0..pipes_count) |j| {
-                posix.close(pipes[j][0]);
-                posix.close(pipes[j][1]);
+                _ = linux.close(pipes[j][0]);
+                _ = linux.close(pipes[j][1]);
             }
 
             // Execute the builtin commands
@@ -288,8 +288,8 @@ fn executePipeCmds(alloc: mem.Allocator, io: Io, inp: []const u8, buff: []u8, st
 
     // Close all pipe ends in the parent
     for (pipes) |pipe| {
-        posix.close(pipe[0]);
-        posix.close(pipe[1]);
+        _ = linux.close(pipe[0]);
+        _ = linux.close(pipe[1]);
     }
 
     // Wait for all child processes
@@ -328,7 +328,7 @@ fn executeWithRedirection(alloc: mem.Allocator, io: Io, cmd: []const u8, argv: [
         std.log.err("Failed to open {s}: {}\n", .{ redir.filename, err });
         return;
     };
-    defer posix.close(fd);
+    defer _ = linux.close(fd);
 
     // Check if it's a builtin
     const is_builtin: bool = try checkbuiltIn(cmd);
