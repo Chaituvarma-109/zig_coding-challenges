@@ -50,7 +50,7 @@ const Wc = struct {
     chars: usize = 0,
     bytes: usize = 0,
 
-    fn count(r: *Io.Reader) !Wc {
+    fn count(r: *Io.Reader, show_chars: bool) !Wc {
         var wc = Wc{};
         var in_word: bool = false;
 
@@ -59,7 +59,9 @@ const Wc = struct {
             wc.bytes += l.len + 1;
 
             for (l) |char| {
-                if ((char & 0xc0) != 0x80) wc.chars += 1;
+                if (show_chars) {
+                    if ((char & 0xc0) != 0x80) wc.chars += 1;
+                }
 
                 const ws: bool = std.ascii.isWhitespace(char);
                 if (!ws and !in_word) {
@@ -76,11 +78,14 @@ const Wc = struct {
     }
 };
 
-pub fn main(init: std.process.Init) !void {
-    const args: std.process.Args = init.minimal.args;
+pub fn main(init: std.process.Init.Minimal) !void {
+    const args: std.process.Args = init.args;
 
     const config = try Config.init(args);
-    const io = init.io;
+
+    var threaded_io: Io.Threaded = .init_single_threaded;
+    defer threaded_io.deinit();
+    const io: Io = threaded_io.io();
 
     var wbuff: [256]u8 = undefined;
     var fwr: Io.File.Writer = .init(.stdout(), io, &wbuff);
@@ -96,7 +101,7 @@ pub fn main(init: std.process.Init) !void {
     var fr: Io.File.Reader = .init(file, io, &buff);
     const r = &fr.interface;
 
-    const count = try Wc.count(r);
+    const count = try Wc.count(r, config.show_chars);
 
     if (config.show_lines) {
         try wr.print("{d} ", .{count.lines});
