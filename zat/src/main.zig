@@ -85,8 +85,8 @@ fn printText(io: Io, wr: *Io.Writer, file: Io.File, mode: Mode) !void {
             },
         }
         r.toss(l.len);
-        wr.flush() catch |err| switch (err) {
-            error.WriteFailed => return,
-        };
     }
+    wr.flush() catch |err| switch (err) {
+        error.WriteFailed => return,
+    };
 }
