@@ -37,50 +37,80 @@ fn handleCompletions(alloc: mem.Allocator, io: Io, env: std.process.Environ, cmd
         matches.deinit(alloc);
     }
 
-    for (builtins) |value| {
-        if (mem.startsWith(u8, value, cmd)) {
-            const dup: []u8 = try alloc.dupe(u8, value);
-            try matches.append(alloc, dup);
-        }
-    }
+    const count: usize = mem.count(u8, cmd, " ");
 
-    const paths: [:0]const u8 = env.getPosix("PATH") orelse return matches;
-    var path_iter = mem.splitScalar(u8, paths, ':');
+    switch (count) {
+        0 => {
+            for (builtins) |value| {
+                if (mem.startsWith(u8, value, cmd)) {
+                    const dup: []u8 = try alloc.dupe(u8, value);
+                    try matches.append(alloc, dup);
+                }
+            }
 
-    while (path_iter.next()) |dir_path| {
-        if (dir_path.len == 0) continue;
+            const paths: [:0]const u8 = env.getPosix("PATH") orelse return matches;
+            var path_iter = mem.splitScalar(u8, paths, ':');
 
-        var directory: Io.Dir = try .openDirAbsolute(io, dir_path, .{ .iterate = true });
-        defer directory.close(io);
+            while (path_iter.next()) |dir_path| {
+                if (dir_path.len == 0) continue;
 
-        var iter: Io.Dir.Iterator = directory.iterate();
+                var directory: Io.Dir = try .openDirAbsolute(io, dir_path, .{ .iterate = true });
+                defer directory.close(io);
 
-        while (iter.next(io) catch continue) |entry| {
-            if (entry.kind == .file or entry.kind == .sym_link) {
-                if (mem.startsWith(u8, entry.name, cmd)) {
-                    // Io.File.stat(entry.name, io).permissions.toMode;
-                    const stat = directory.statFile(io, entry.name, .{}) catch continue;
-                    const perms = @intFromEnum(stat.permissions);
-                    const executable: bool = (perms & 0o111) != 0;
-                    if (executable) {
-                        var exists: bool = false;
-                        for (matches.items) |value| {
-                            if (mem.eql(u8, value, entry.name)) {
-                                exists = true;
-                                break;
+                var iter: Io.Dir.Iterator = directory.iterate();
+
+                while (iter.next(io) catch continue) |entry| {
+                    if (entry.kind == .file or entry.kind == .sym_link) {
+                        if (mem.startsWith(u8, entry.name, cmd)) {
+                            // Io.File.stat(entry.name, io).permissions.toMode;
+                            const stat = directory.statFile(io, entry.name, .{}) catch continue;
+                            const perms = @intFromEnum(stat.permissions);
+                            const executable: bool = (perms & 0o111) != 0;
+                            if (executable) {
+                                var exists: bool = false;
+                                for (matches.items) |value| {
+                                    if (mem.eql(u8, value, entry.name)) {
+                                        exists = true;
+                                        break;
+                                    }
+                                }
+                                if (!exists) {
+                                    const dup: []u8 = alloc.dupe(u8, entry.name) catch continue;
+                                    matches.append(alloc, dup) catch {
+                                        alloc.free(dup);
+                                        continue;
+                                    };
+                                }
                             }
-                        }
-                        if (!exists) {
-                            const dup: []u8 = alloc.dupe(u8, entry.name) catch continue;
-                            matches.append(alloc, dup) catch {
-                                alloc.free(dup);
-                                continue;
-                            };
                         }
                     }
                 }
             }
-        }
+        },
+        else => {
+            const idx: usize = mem.lastIndexOfScalar(u8, cmd, ' ') orelse return error.InvalidInput;
+            const partial_cmd: []const u8 = cmd[idx + 1 ..];
+
+            const slash_idx: ?usize = mem.lastIndexOfScalar(u8, partial_cmd, '/');
+            const dir_part = if (slash_idx) |i| partial_cmd[0 .. i + 1] else "";
+            const name_prefix: []const u8 = if (slash_idx) |i| partial_cmd[i + 1 ..] else partial_cmd;
+            const search_dir = if (dir_part.len > 1) dir_part else ".";
+
+            var dir = try Io.Dir.cwd().openDir(io, search_dir, .{ .iterate = true });
+            defer dir.close(io);
+
+            var dirIter = dir.iterate();
+
+            while (try dirIter.next(io)) |entry| {
+                if (entry.kind == .file or entry.kind == .directory or entry.kind == .sym_link) {
+                    if (mem.startsWith(u8, entry.name, name_prefix)) {
+                        const suffix: []const u8 = if (entry.kind == .directory) "/" else "";
+                        const dup: []u8 = try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ dir_part, entry.name, suffix });
+                        try matches.append(alloc, dup);
+                    }
+                }
+            }
+        },
     }
 
     return matches;
@@ -201,6 +231,9 @@ pub fn readline(alloc: mem.Allocator, io: Io, prompt: []const u8, env: std.proce
                     matches.deinit(alloc);
                 }
 
+                const last_space: ?usize = mem.lastIndexOfScalar(u8, partials, ' ');
+                const prefix_len: usize = if (last_space) |idx| partials.len - idx - 1 else partials.len;
+
                 switch (matches.items.len) {
                     0 => {
                         try stdout.writeAll("\x07");
@@ -208,20 +241,23 @@ pub fn readline(alloc: mem.Allocator, io: Io, prompt: []const u8, env: std.proce
                     },
                     1 => {
                         const rem: []const u8 = matches.items[0];
+                        const is_dir: bool = rem.len > 0 and rem[rem.len - 1] == '/';
 
-                        try stdout.writeAll(rem[partials.len..]);
-                        try stdout.writeAll(" ");
+                        try stdout.writeAll(rem[prefix_len..]);
+                        if (!is_dir) try stdout.writeAll(" ");
                         try stdout.flush();
 
-                        try line_buff.appendSlice(alloc, rem[partials.len..]);
-                        try line_buff.append(alloc, ' ');
+                        try line_buff.appendSlice(alloc, rem[prefix_len..]);
+                        if (!is_dir) try line_buff.append(alloc, ' ');
 
                         tab_count = 0;
                     },
                     else => {
+                        const last_space3: ?usize = mem.lastIndexOfScalar(u8, partials, ' ');
+                        const partial_arg2: []u8 = if (last_space3) |si| partials[si + 1 ..] else partials;
                         const lcp: []const u8 = longestCommonPrefix(matches.items);
-                        if (lcp.len > partials.len) {
-                            const remaining: []const u8 = lcp[partials.len..];
+                        if (lcp.len > partial_arg2.len) {
+                            const remaining: []const u8 = lcp[partial_arg2.len..];
 
                             try stdout.writeAll(remaining);
                             try stdout.flush();
@@ -239,10 +275,15 @@ pub fn readline(alloc: mem.Allocator, io: Io, prompt: []const u8, env: std.proce
                                     }
                                 }.lessThan);
 
+                                const last_space2: ?usize = mem.lastIndexOfScalar(u8, partials, ' ');
+                                const partial_arg: []u8 = if (last_space2) |i| partials[i + 1 ..] else partials;
+                                const slash_idx: ?usize = mem.lastIndexOfScalar(u8, partial_arg, '/');
+                                const dir_part_len: usize = if (slash_idx) |si| si + 1 else 0;
+
                                 try stdout.writeAll("\n");
 
                                 for (matches.items, 0..) |match, i| {
-                                    try stdout.writeAll(match);
+                                    try stdout.writeAll(match[dir_part_len..]);
                                     if (i < matches.items.len - 1) {
                                         try stdout.writeAll("  ");
                                     }
