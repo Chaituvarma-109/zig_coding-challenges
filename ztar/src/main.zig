@@ -90,7 +90,7 @@ pub fn main(init: std.process.Init) !void {
             try stdout_writer.print("{s}\n", .{f.name});
         }
     } else if (extract) {
-        try tar.pipeToFileSystem(io, .cwd(), r, .{});
+        try tar.extract(io, .cwd(), r, .{});
     }
 
     try stdout_writer.flush();
