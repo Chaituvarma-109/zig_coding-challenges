@@ -152,7 +152,6 @@ pub fn main(init: process.Init) !void {
 
 fn parseInp(alloc: mem.Allocator, inp: []const u8) ![][]const u8 {
     var tokens: std.ArrayList([]const u8) = .empty;
-    defer tokens.deinit(alloc);
 
     var pos: usize = 0;
 
