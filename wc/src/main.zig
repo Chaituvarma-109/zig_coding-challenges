@@ -2,6 +2,9 @@ const std = @import("std");
 
 const Io = std.Io;
 
+const READ_BUF_SIZE = 512 * 1024;
+const WRITE_BUF_SIZE = 256;
+
 const Config = struct {
     show_lines: bool = false,
     show_words: bool = false,
@@ -50,7 +53,9 @@ const Wc = struct {
     chars: usize = 0,
     bytes: usize = 0,
 
-    fn count(r: *Io.Reader, show_chars: bool) !Wc {
+    fn count(r: *Io.Reader, comptime show_chars: bool) !Wc {
+        const UTF8_CONTINUATION_MASK: u8 = comptime 0xc0;
+        const UTF8_CONTINUATION_BYTE: u8 = comptime 0x80;
         var wc = Wc{};
         var in_word: bool = false;
 
@@ -60,7 +65,7 @@ const Wc = struct {
 
             for (l) |char| {
                 if (show_chars) {
-                    if ((char & 0xc0) != 0x80) wc.chars += 1;
+                    if ((char & UTF8_CONTINUATION_MASK) != UTF8_CONTINUATION_BYTE) wc.chars += 1;
                 }
 
                 const ws: bool = std.ascii.isWhitespace(char);
@@ -87,7 +92,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer threaded_io.deinit();
     const io: Io = threaded_io.io();
 
-    var wbuff: [256]u8 = undefined;
+    var wbuff: [WRITE_BUF_SIZE]u8 = undefined;
     var fwr: Io.File.Writer = .init(.stdout(), io, &wbuff);
     const wr: *Io.Writer = &fwr.interface;
 
@@ -97,11 +102,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const file = try Io.Dir.cwd().openFile(io, file_name, .{ .mode = .read_only });
     defer file.close(io);
 
-    var buff: [512 * 1024]u8 = undefined;
+    var buff: [READ_BUF_SIZE]u8 = undefined;
     var fr: Io.File.Reader = .init(file, io, &buff);
     const r = &fr.interface;
 
-    const count = try Wc.count(r, config.show_chars);
+    const count = if (config.show_chars) try Wc.count(r, true) else try Wc.count(r, false);
 
     if (config.show_lines) {
         try wr.print("{d} ", .{count.lines});
