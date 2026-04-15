@@ -1,9 +1,8 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
-const zeit = @import("zeit");
 
+const Io = std.Io;
 const mem = std.mem;
-const fs = std.fs;
 const time = std.time;
 const fmt = std.fmt;
 
@@ -25,27 +24,27 @@ const CpuStats = struct {
     softirq: f64 = 0.0,
     steal: f64 = 0.0,
 
-    fn readCpuStat() !CpuStats {
-        const f: fs.File = try fs.openFileAbsolute("/proc/stat", .{});
-        defer f.close();
+    fn readCpuStat(io: Io) !CpuStats {
+        const f: Io.File = try Io.Dir.openFileAbsolute(io, "/proc/stat", .{ .mode = .read_only });
+        defer f.close(io);
 
         var buff: [1024]u8 = undefined;
-        var fr = f.reader(&buff);
+        var fr = f.reader(io, &buff);
 
-        const line = try fr.interface.takeDelimiter('\n');
+        const line: ?[]u8 = try fr.interface.takeDelimiter('\n');
 
         if (line) |ln| {
             var iter = mem.tokenizeScalar(u8, ln, ' ');
             _ = iter.next();
 
-            const user = try fmt.parseFloat(f64, iter.next() orelse "0.0");
-            const nice = try fmt.parseFloat(f64, iter.next() orelse "0.0");
-            const system = try fmt.parseFloat(f64, iter.next() orelse "0.0");
-            const idle = try fmt.parseFloat(f64, iter.next() orelse "0.0");
-            const iowait = try fmt.parseFloat(f64, iter.next() orelse "0.0");
-            const irq = try fmt.parseFloat(f64, iter.next() orelse "0.0");
-            const softirq = try fmt.parseFloat(f64, iter.next() orelse "0.0");
-            const steal = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const user: f64 = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const nice: f64 = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const system: f64 = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const idle: f64 = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const iowait: f64 = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const irq: f64 = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const softirq: f64 = try fmt.parseFloat(f64, iter.next() orelse "0.0");
+            const steal: f64 = try fmt.parseFloat(f64, iter.next() orelse "0.0");
 
             return CpuStats{
                 .user = user,
@@ -68,21 +67,18 @@ const Uptime = struct {
     minutes: u64,
     days: u64,
 
-    fn readUptime() !Uptime {
-        const f: fs.File = try fs.openFileAbsolute("/proc/uptime", .{});
-        defer f.close();
-
+    fn readUptime(io: Io) !Uptime {
         var buff: [256]u8 = undefined;
-        const n: usize = try f.read(&buff);
+        const bytes: []u8 = try Io.Dir.readFile(.cwd(), io, "/proc/uptime", &buff);
 
-        var iter = mem.tokenizeAny(u8, buff[0..n], " ");
+        var iter = mem.tokenizeAny(u8, bytes, " ");
         const seconds_str: []const u8 = iter.next() orelse return error.ParseError;
         const seconds: f64 = try fmt.parseFloat(f64, seconds_str);
 
-        const total_secs = @as(u64, @intFromFloat(seconds));
-        const days = total_secs / 86400;
-        const hours = (total_secs % 86400) / 3600;
-        const minutes = (total_secs % 3600) / 60;
+        const total_secs: u64 = @as(u64, @intFromFloat(seconds));
+        const days: u64 = total_secs / 86400;
+        const hours: u64 = (total_secs % 86400) / 3600;
+        const minutes: u64 = (total_secs % 3600) / 60;
 
         return .{
             .seconds = seconds,
@@ -131,15 +127,16 @@ const MemInfo = struct {
     srclaim: u64 = 0,
     shmem: u64 = 0,
 
-    fn readMemStats() !MemInfo {
-        const f: fs.File = try fs.openFileAbsolute("/proc/meminfo", .{});
-        defer f.close();
+    fn readMemStats(io: Io) !MemInfo {
+        const f: Io.File = try Io.Dir.openFileAbsolute(io, "/proc/meminfo", .{ .mode = .read_only });
+        defer f.close(io);
 
         var buff: [256]u8 = undefined;
-        var fr = f.reader(&buff);
+        var fr = f.reader(io, &buff);
+        const r: *Io.Reader = &fr.interface;
         var stats: MemInfo = .{};
 
-        while (try fr.interface.takeDelimiter('\n')) |line| {
+        while (try r.takeDelimiter('\n')) |line| {
             var iter = mem.tokenizeAny(u8, line, ": ");
             const key: []const u8 = iter.next() orelse continue;
             const value_str: []const u8 = iter.next() orelse continue;
@@ -184,7 +181,7 @@ const Process = struct {
 
     const Processes = std.MultiArrayList(Process);
 
-    fn listProcess(alloc: mem.Allocator, uptime_secs: u64) !Processes {
+    fn listProcess(alloc: mem.Allocator, io: Io, uptime_secs: u64) !Processes {
         var process = Processes{};
         errdefer {
             for (process.items(.name)) |*name| {
@@ -193,8 +190,8 @@ const Process = struct {
             process.deinit(alloc);
         }
 
-        var proc_dir = try fs.openDirAbsolute("/proc", .{ .iterate = true });
-        defer proc_dir.close();
+        var proc_dir: Io.Dir = try .openDirAbsolute(io, "/proc", .{ .iterate = true });
+        defer proc_dir.close(io);
 
         var dir_iter = proc_dir.iterate();
         while (try dir_iter.next()) |entry| {
@@ -203,26 +200,22 @@ const Process = struct {
             const pid = fmt.parseUnsigned(u32, entry.name, 10) catch continue;
 
             var buff: [256]u8 = undefined;
-            const pid_path = try fmt.bufPrint(&buff, "/proc/{d}/stat", .{pid});
+            const pid_path: []u8 = try fmt.bufPrint(&buff, "/proc/{d}/stat", .{pid});
 
             var rbuff: [1024]u8 = undefined;
-            const f = fs.openFileAbsolute(pid_path, .{}) catch continue;
-            defer f.close();
-
-            const n = try f.read(&rbuff);
-            const content = rbuff[0..n];
+            const content: []u8 = Io.Dir.readFile(.cwd(), io, pid_path, &rbuff, .{}) catch continue;
 
             const clock_tcks: u64 = 100;
 
             const start_paren: usize = mem.indexOf(u8, content, "(") orelse continue;
             const last_paren: usize = mem.lastIndexOf(u8, content, ")") orelse continue;
 
-            const name = content[start_paren + 1 .. last_paren];
+            const name: []const u8 = content[start_paren + 1 .. last_paren];
 
-            const name_cp = try alloc.dupe(u8, name);
+            const name_cp: []u8 = try alloc.dupe(u8, name);
             errdefer alloc.free(name_cp);
 
-            const after_name = content[last_paren + 2 ..];
+            const after_name: []u8 = content[last_paren + 2 ..];
             var fields = mem.tokenizeScalar(u8, after_name, ' ');
 
             const state = (fields.next() orelse "?")[0];
@@ -266,7 +259,7 @@ const Process = struct {
             const minutes = process_usage_sec / 60;
             const seconds = process_usage_sec % 60;
             const centiseconds = ((utime + stime) % clock_tcks) * 100 / clock_tcks;
-            const ptime = try fmt.allocPrint(alloc, "{d:0>2}:{d:0>2}:{d:0>2}", .{ minutes, seconds, centiseconds });
+            const ptime: []u8 = try fmt.allocPrint(alloc, "{d:0>2}:{d:0>2}:{d:0>2}", .{ minutes, seconds, centiseconds });
             errdefer alloc.free(ptime);
 
             const p: Process = .{
@@ -288,14 +281,11 @@ const Process = struct {
     }
 };
 
-fn getLoadAvg() ![3]f64 {
-    const f: fs.File = try fs.openFileAbsolute("/proc/loadavg", .{});
-    defer f.close();
-
+fn getLoadAvg(io: Io) ![3]f64 {
     var buff: [2048]u8 = undefined;
-    const n: usize = try f.read(&buff);
+    const bytes: []u8 = try Io.Dir.readFile(.cwd(), io, "/proc/loadavg", &buff);
 
-    var iter = mem.tokenizeAny(u8, buff[0..n], " ");
+    var iter = mem.tokenizeAny(u8, bytes, " ");
     const avg1 = try fmt.parseFloat(f64, iter.next() orelse "0");
     const avg2 = try fmt.parseFloat(f64, iter.next() orelse "0");
     const avg3 = try fmt.parseFloat(f64, iter.next() orelse "0");
@@ -303,10 +293,15 @@ fn getLoadAvg() ![3]f64 {
     return [3]f64{ avg1, avg2, avg3 };
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var alloc: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = alloc.deinit();
     const gpa: mem.Allocator = alloc.allocator();
+
+    var threaded_io: Io.Threaded = .init(gpa, .{ .environ = init.minimal.environ });
+    defer threaded_io.deinit();
+
+    const io: Io = threaded_io.io();
 
     var buff: [1024]u8 = undefined;
     var tty = try vaxis.Tty.init(&buff);
@@ -358,9 +353,10 @@ pub fn main() !void {
                 .winsize => |ws| try vx.resize(gpa, tty_writer, ws),
             }
         }
-        const now: i64 = time.milliTimestamp();
+        const now: Io.Timestamp = try Io.Clock.now(.real, io);
+        const t_now: i64 = try now.toMilliseconds();
 
-        if (now - last_update >= 1000) {
+        if (t_now - last_update >= 1000) {
             last_update = now;
 
             const win = vx.window();
@@ -368,15 +364,18 @@ pub fn main() !void {
 
             // Header
             // current time and up time
-            const instant = try zeit.instant(.{});
-            const local = try zeit.local(gpa, null);
-            defer local.deinit();
+            const total_secs: i96 = now.nanoseconds / std.time.ns_per_s;
 
-            const now_local = instant.in(&local);
-            const dt = now_local.time();
+            // add timezone offset,for IST it is +5:30
+            const timeoffset: i96 = 5 * 3600 + 30 * 60;
+            const local_secs: i96 = total_secs + timeoffset;
 
-            const uptime: Uptime = try .readUptime();
-            const uptime_header: []u8 = try fmt.allocPrint(gpa, "ztop - {d:0>2}:{d:0>2}:{d:0>2} | uptime: {d:0>2}:{d:0>2}", .{ dt.hour, dt.minute, dt.second, uptime.hours, uptime.minutes });
+            const seconds: u32 = @as(u32, @intCast(@mod(local_secs, 60)));
+            const minutes: u32 = @as(u32, @intCast(@mod(@divTrunc(local_secs, 60), 60)));
+            const hours: u32 = @as(u32, @intCast(@mod(@divTrunc(local_secs, 3600), 12)));
+
+            const uptime: Uptime = try .readUptime(io);
+            const uptime_header: []u8 = try fmt.allocPrint(gpa, "ztop - {d:0>2}:{d:0>2}:{d:0>2} | uptime: {d:0>2}:{d:0>2}", .{ hours, minutes, seconds, uptime.hours, uptime.minutes });
             defer gpa.free(uptime_header);
 
             var row: u16 = 0;
@@ -384,7 +383,7 @@ pub fn main() !void {
             row += 1;
 
             // get load avg
-            const ld: [3]f64 = try getLoadAvg();
+            const ld: [3]f64 = try getLoadAvg(io);
             const load_avg: []u8 = try fmt.allocPrint(gpa, "load avg: {d:.2}, {d:.2}, {d:.2}", .{ ld[0], ld[1], ld[2] });
             defer gpa.free(load_avg);
 
@@ -392,28 +391,28 @@ pub fn main() !void {
             row += 1;
 
             // cpu stats
-            const cpu_stats = try CpuStats.readCpuStat();
+            const cpu_stats: CpuStats = try .readCpuStat(io);
 
-            const user_diff = cpu_stats.user - prev_stats.user;
-            const system_diff = cpu_stats.system - prev_stats.system;
-            const nice_diff = cpu_stats.nice - prev_stats.nice;
-            const idle_diff = cpu_stats.idle - prev_stats.idle;
-            const iowait_diff = cpu_stats.iowait - prev_stats.iowait;
-            const irq_diff = cpu_stats.irq - prev_stats.irq;
-            const softirq_diff = cpu_stats.softirq - prev_stats.softirq;
-            const steal_diff = cpu_stats.steal - prev_stats.steal;
-            const total_diff = user_diff + system_diff + nice_diff + idle_diff + iowait_diff + irq_diff + softirq_diff + steal_diff;
+            const user_diff: f64 = cpu_stats.user - prev_stats.user;
+            const system_diff: f64 = cpu_stats.system - prev_stats.system;
+            const nice_diff: f64 = cpu_stats.nice - prev_stats.nice;
+            const idle_diff: f64 = cpu_stats.idle - prev_stats.idle;
+            const iowait_diff: f64 = cpu_stats.iowait - prev_stats.iowait;
+            const irq_diff: f64 = cpu_stats.irq - prev_stats.irq;
+            const softirq_diff: f64 = cpu_stats.softirq - prev_stats.softirq;
+            const steal_diff: f64 = cpu_stats.steal - prev_stats.steal;
+            const total_diff: f64 = user_diff + system_diff + nice_diff + idle_diff + iowait_diff + irq_diff + softirq_diff + steal_diff;
 
-            const user_pct = (user_diff / total_diff) * 100.0;
-            const sys_pct = (system_diff / total_diff) * 100.0;
-            const nice_pct = (nice_diff / total_diff) * 100.0;
-            const idle_pct = (idle_diff / total_diff) * 100.0;
-            const iowait_pct = (iowait_diff / total_diff) * 100.0;
-            const irq_pct = (irq_diff / total_diff) * 100.0;
-            const softirq_pct = (softirq_diff / total_diff) * 100.0;
-            const steal_pct = (steal_diff / total_diff) * 100.0;
+            const user_pct: f64 = (user_diff / total_diff) * 100.0;
+            const sys_pct: f64 = (system_diff / total_diff) * 100.0;
+            const nice_pct: f64 = (nice_diff / total_diff) * 100.0;
+            const idle_pct: f64 = (idle_diff / total_diff) * 100.0;
+            const iowait_pct: f64 = (iowait_diff / total_diff) * 100.0;
+            const irq_pct: f64 = (irq_diff / total_diff) * 100.0;
+            const softirq_pct: f64 = (softirq_diff / total_diff) * 100.0;
+            const steal_pct: f64 = (steal_diff / total_diff) * 100.0;
 
-            const cpu_stat = try std.fmt.allocPrint(gpa, "% Cpu: {d:.1} us, {d:.1} sy, {d:.1} ni, {d:.1} id, {d:.1} wa, {d:.1} hi, {d:.1} si, {d:.1} st", .{ user_pct, sys_pct, nice_pct, idle_pct, iowait_pct, irq_pct, softirq_pct, steal_pct });
+            const cpu_stat: []u8 = try std.fmt.allocPrint(gpa, "% Cpu: {d:.1} us, {d:.1} sy, {d:.1} ni, {d:.1} id, {d:.1} wa, {d:.1} hi, {d:.1} si, {d:.1} st", .{ user_pct, sys_pct, nice_pct, idle_pct, iowait_pct, irq_pct, softirq_pct, steal_pct });
             defer gpa.free(cpu_stat);
 
             _ = win.printSegment(.{ .text = cpu_stat, .style = .{ .fg = .{ .index = 6 }, .bold = true } }, .{ .row_offset = row });
@@ -422,19 +421,19 @@ pub fn main() !void {
             row += 1;
 
             // meminfo
-            const mem_stats: MemInfo = try .readMemStats();
+            const mem_stats: MemInfo = try .readMemStats(io);
             const used: u64 = mem_stats.total - (mem_stats.free + mem_stats.buffers + mem_stats.cached);
             const swap_used: u64 = mem_stats.swapTotal - mem_stats.swapFree;
             const buff_cache = mem_stats.buffers + (mem_stats.cached + mem_stats.srclaim);
 
-            const total = try mem_unit.formatMem(mem_stats.total);
-            const free = try mem_unit.formatMem(mem_stats.free);
-            const used_str = try mem_unit.formatMem(used);
-            const available = try mem_unit.formatMem(mem_stats.available);
-            const swap_total = try mem_unit.formatMem(mem_stats.swapTotal);
-            const swap_free = try mem_unit.formatMem(mem_stats.swapFree);
-            const swap_used_str = try mem_unit.formatMem(swap_used);
-            const buff_cache_str = try mem_unit.formatMem(buff_cache);
+            const total: []u8 = try mem_unit.formatMem(mem_stats.total);
+            const free: []u8 = try mem_unit.formatMem(mem_stats.free);
+            const used_str: []u8 = try mem_unit.formatMem(used);
+            const available: []u8 = try mem_unit.formatMem(mem_stats.available);
+            const swap_total: []u8 = try mem_unit.formatMem(mem_stats.swapTotal);
+            const swap_free: []u8 = try mem_unit.formatMem(mem_stats.swapFree);
+            const swap_used_str: []u8 = try mem_unit.formatMem(swap_used);
+            const buff_cache_str: []u8 = try mem_unit.formatMem(buff_cache);
 
             const mem_info: []u8 = try fmt.allocPrint(gpa, "Memory: {s} Total, {s} Free, {s} Used, {s} buff/cache", .{ total, free, used_str, buff_cache_str });
             defer gpa.free(mem_info);
@@ -449,8 +448,8 @@ pub fn main() !void {
             row += 2;
 
             // Process listing
-            const uptime_sec = @as(u64, @intFromFloat(uptime.seconds));
-            var processess = try Process.listProcess(gpa, uptime_sec);
+            const uptime_sec: u64 = @as(u64, @intFromFloat(uptime.seconds));
+            var processess = try Process.listProcess(gpa, io, uptime_sec);
             defer {
                 for (processess.items(.name), processess.items(.proc_time)) |*name, *proc_time| {
                     gpa.free(name.*);
@@ -488,7 +487,7 @@ pub fn main() !void {
 
             try vx.render(tty_writer);
         }
-        std.Thread.sleep(100 * time.ns_per_ms);
+        io.sleep(.fromNanoseconds(100), .cpu_thread);
     }
     tty_writer.flush();
 }
