@@ -16,11 +16,8 @@ pub fn parse(alloc: std.mem.Allocator, arr_lst: std.MultiArrayList(Result), cont
         switch (tok) {
             TokenType.object_start => {
                 try pars_lst.append(alloc, str);
-                try pars_lst.append(alloc, " \n");
             },
             TokenType.object_end => {
-                try pars_lst.append(alloc, "\n");
-                try pars_lst.append(alloc, " ");
                 try pars_lst.append(alloc, str);
             },
             TokenType.array_start => {
@@ -32,12 +29,9 @@ pub fn parse(alloc: std.mem.Allocator, arr_lst: std.MultiArrayList(Result), cont
             TokenType.colon => {
                 colon = true;
                 try pars_lst.append(alloc, str);
-                try pars_lst.append(alloc, " ");
             },
             TokenType.comma => {
                 try pars_lst.append(alloc, str);
-                try pars_lst.append(alloc, "\n");
-                try pars_lst.append(alloc, " ");
             },
             TokenType.true => {
                 try pars_lst.append(alloc, str);
@@ -58,6 +52,10 @@ pub fn parse(alloc: std.mem.Allocator, arr_lst: std.MultiArrayList(Result), cont
             TokenType.number => {
                 try pars_lst.append(alloc, str);
             },
+            TokenType.new_line => try pars_lst.append(alloc, str),
+            TokenType.space => try pars_lst.append(alloc, str),
+            TokenType.carriage_return => try pars_lst.append(alloc, str),
+            TokenType.tab => try pars_lst.append(alloc, str),
         }
     }
 

@@ -11,6 +11,10 @@ pub const TokenType = enum {
     colon,
     comma,
     number,
+    new_line,
+    tab,
+    carriage_return,
+    space,
     true,
     false,
     null,
@@ -85,9 +89,25 @@ pub fn lexe(alloc: mem.Allocator, bytes: []u8) !std.MultiArrayList(Result) {
                 i += 5;
                 break :blk r;
             },
-            '\n', '\r', '\t', ' ' => {
+            '\n' => {
+                const r: Result = Result{ .token = .new_line, .start = i, .end = i + 1 };
                 i += 1;
-                continue;
+                break :blk r;
+            },
+            '\t' => {
+                const r = Result{ .token = .space, .start = i, .end = i + 1 };
+                i += 1;
+                break :blk r;
+            },
+            '\r' => {
+                const r = Result{ .token = .carriage_return, .start = i, .end = i + 1 };
+                i += 1;
+                break :blk r;
+            },
+            ' ' => {
+                const r = Result{ .token = .tab, .start = i, .end = i + 1 };
+                i += 1;
+                break :blk r;
             },
             '-', '0'...'9' => {
                 var end: usize = i + 1;
