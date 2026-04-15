@@ -1,0 +1,10 @@
+[
+  {
+    "adapter": "GDB",
+    "label": "zat debug",
+    "request": "launch",
+    "program": "zig-out/bin/zat",
+    "args": ["test.txt"],
+    "build": "zat build",
+  },
+]
