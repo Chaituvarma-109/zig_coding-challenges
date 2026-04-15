@@ -1,6 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
+const fmt = std.fmt;
 
 const Language = enum {
     zig,
@@ -21,11 +22,11 @@ const Stats = struct {
 
 /// this is doc comment.
 pub fn main(init: std.process.Init) !void {
-    const arena: std.mem.Allocator = init.arena.allocator();
+    const arena: mem.Allocator = init.arena.allocator();
 
     const io = init.io;
 
-    var stdout_buffer: [1024]u8 = undefined;
+    var stdout_buffer: [4096]u8 = undefined;
     var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
     const stdout_writer = &stdout_file_writer.interface;
 
@@ -42,9 +43,7 @@ pub fn main(init: std.process.Init) !void {
 
     var stats: std.MultiArrayList(Stats) = .empty;
     defer {
-        for (stats.items(.filename)) |*fname| {
-            arena.free(fname.*);
-        }
+        for (stats.items(.filename)) |*fname| arena.free(fname.*);
         stats.deinit(arena);
     }
 
@@ -60,7 +59,7 @@ pub fn main(init: std.process.Init) !void {
         switch (entry.kind) {
             .file => {
                 var pathbuff: [Io.Dir.max_path_bytes]u8 = undefined;
-                const file_path = try std.fmt.bufPrint(&pathbuff, "{s}/{s}", .{ directory, entry.path });
+                const file_path = try fmt.bufPrint(&pathbuff, "{s}/{s}", .{ directory, entry.path });
                 const owned_path = try arena.dupe(u8, file_path);
 
                 const f = try Io.Dir.cwd().openFile(io, file_path, .{});
@@ -161,9 +160,63 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    for (stats.items(.filename), stats.items(.comments), stats.items(.blank), stats.items(.code), stats.items(.doc_comments)) |*fname, *comm, *blnk, *cd, *dcomm| {
-        try stdout_writer.print("{s} -------- {d} {d} {d} {d}\n", .{ fname.*, comm.*, blnk.*, cd.*, dcomm.* });
+    const file_col = 38;
+    const num_col = 12;
+    const sep = "─" ** (file_col + num_col * 5);
+
+    const slice = stats.slice();
+    const filenames = slice.items(.filename);
+    const all_lines = slice.items(.total_lines);
+    const all_blank = slice.items(.blank);
+    const all_comments = slice.items(.comments);
+    const all_dcomments = slice.items(.doc_comments);
+    const all_code = slice.items(.code);
+
+    // header
+    try stdout_writer.print("{s}\n", .{sep});
+    try stdout_writer.print("{s:<38}{s:>12}{s:>12}{s:>12}{s:>12}{s:>12}\n", .{
+        "File", "TotalLines", "Blanks", "Comments", "DocComments", "Code",
+    });
+    try stdout_writer.print("{s}\n", .{sep});
+
+    // per-file rows
+    var name_buf: [file_col]u8 = undefined;
+    for (0..stats.len) |i| {
+        const display = if (filenames[i].len <= file_col)
+            filenames[i]
+        else blk: {
+            const suffix = filenames[i][filenames[i].len - (file_col - 1) ..];
+            break :blk try fmt.bufPrint(&name_buf, "~{s}", .{suffix});
+        };
+        try stdout_writer.print("{s:<38}{d:>12}{d:>12}{d:>12}{d:>12}{d:>12}\n", .{
+            display,
+            all_lines[i],
+            all_blank[i],
+            all_comments[i],
+            all_dcomments[i],
+            all_code[i],
+        });
     }
+
+    // totals row
+    var tot_lines: usize = 0;
+    var tot_blank: usize = 0;
+    var tot_comments: usize = 0;
+    var tot_dcomments: usize = 0;
+    var tot_code: usize = 0;
+    for (0..stats.len) |i| {
+        tot_lines += all_lines[i];
+        tot_blank += all_blank[i];
+        tot_comments += all_comments[i];
+        tot_dcomments += all_dcomments[i];
+        tot_code += all_code[i];
+    }
+
+    try stdout_writer.print("{s}\n", .{sep});
+    try stdout_writer.print("{s:<38}{d:>12}{d:>12}{d:>12}{d:>12}{d:>12}\n", .{
+        "Total", tot_lines, tot_blank, tot_comments, tot_dcomments, tot_code,
+    });
+    try stdout_writer.print("{s}\n", .{sep});
 
     try stdout_writer.flush();
 }
