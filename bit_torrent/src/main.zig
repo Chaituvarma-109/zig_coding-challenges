@@ -2,17 +2,21 @@ const std = @import("std");
 const dcode = @import("bencode/decode.zig");
 
 pub fn main() !void {
-    const alloc = std.heap.page_allocator;
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
 
-    const args = try std.process.argsAlloc(alloc);
+    const alloc: std.mem.Allocator = gpa.allocator();
+
+    const args: [][:0]u8 = try std.process.argsAlloc(alloc);
     defer alloc.free(args);
 
-    const torrent_file = args[1];
+    const torrent_file: [:0]u8 = args[1];
 
     const f = try std.fs.openFileAbsolute(torrent_file, .{});
     defer f.close();
 
-    const data = try f.readToEndAlloc(alloc, std.fs.max_path_bytes);
+    var buff: [1024]u8 = undefined;
+    const n: usize = try f.read(&buff);
 
-    dcode.decode(alloc, data);
+    dcode.decode(alloc, buff[0..n]);
 }

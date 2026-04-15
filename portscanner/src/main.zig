@@ -44,18 +44,25 @@ pub fn main(init: std.process.Init) !void {
         var group: Io.Group = .init;
 
         if (std.mem.containsAtLeast(u8, host, 1, ",")) {
-            group.async(io, sweepScan, .{ io, host, wr });
+            var host_iter = mem.splitSequence(u8, host, ",");
+            while (host_iter.next()) |h| {
+                group.async(io, vanillaScan, .{ io, h, wr });
+                try group.await(io);
+            }
         } else {
             group.async(io, vanillaScan, .{ io, host, wr });
+            try group.await(io);
         }
-
-        try group.await(io);
     }
 }
 
 fn vanillaScan(io: Io, host: []const u8, wr: *Io.Writer) !void {
     for (1..65536) |port| {
         const address = net.IpAddress.parse(host, @intCast(port)) catch continue;
+        wr.print("port: {d}\n", .{port}) catch |err| {
+            std.log.err("{any}\n", .{err});
+        };
+        try wr.flush();
 
         // const timeout_ns: i96 = 2000 * std.time.ns_per_ms;
         // const duration: Io.Clock.Duration = .{ .clock = .cpu_thread, .raw = .{ .nanoseconds = timeout_ns } };
@@ -74,13 +81,5 @@ fn vanillaScan(io: Io, host: []const u8, wr: *Io.Writer) !void {
         };
     }
 
-    return;
-}
-
-fn sweepScan(io: Io, host: []const u8, wr: *Io.Writer) !void {
-    var host_iter = mem.splitSequence(u8, host, ",");
-    while (host_iter.next()) |h| {
-        vanillaScan(io, h, wr) catch continue;
-    }
     return;
 }

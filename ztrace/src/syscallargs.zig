@@ -363,7 +363,7 @@ fn readArgvArray(allocator: std.mem.Allocator, pid: i32, argv_ptr: u64) ![]u8 {
 }
 
 fn readMemoryFromProcess(allocator: std.mem.Allocator, pid: i32, addr: u64, len: usize) ![]u8 {
-    var result: []u8 = try allocator.alloc(u8, len);
+    const result: []u8 = try allocator.alloc(u8, len);
     errdefer allocator.free(result);
 
     const local_iov = [_]std.posix.iovec{
