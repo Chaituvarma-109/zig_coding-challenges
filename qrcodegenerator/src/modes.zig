@@ -73,12 +73,12 @@ pub fn getMode(inp: []const u8) !Modes {
     return ModeError.UnsupportedEncoding;
 }
 
-pub fn getModeIndicator(mode: Modes) u4 {
+pub fn getModeIndicator(mode: Modes) []const u8 {
     return switch (mode) {
-        .numeric => 0b0001,
-        .alphanumeric => 0b0010,
-        .byte => 0b0100,
-        .kanji => 0b1000,
+        .numeric => "0001",
+        .alphanumeric => "0010",
+        .byte => "0100",
+        .kanji => "1000",
     };
 }
 
@@ -137,7 +137,7 @@ test "numeric mode indicator" {
 
     const mi = getModeIndicator(m);
 
-    try testing.expectEqual(mi, 0b0001);
+    try testing.expectEqual(mi, "0001");
 }
 
 test "alphanumeric mode indicator1" {
@@ -146,7 +146,7 @@ test "alphanumeric mode indicator1" {
 
     const mi = getModeIndicator(m);
 
-    try testing.expectEqual(mi, 0b0010);
+    try testing.expectEqual(mi, "0010");
 }
 
 test "alphanumeric mode indicator2" {
@@ -155,7 +155,7 @@ test "alphanumeric mode indicator2" {
 
     const mi = getModeIndicator(m);
 
-    try testing.expectEqual(mi, 0b0010);
+    try testing.expectEqual(mi, "0010");
 }
 
 test "byte mode indicator" {
@@ -164,7 +164,7 @@ test "byte mode indicator" {
 
     const mi = getModeIndicator(m);
 
-    try testing.expectEqual(mi, 0b0100);
+    try testing.expectEqual(mi, "0100");
 }
 
 test "kanji mode indicator1" {
@@ -173,7 +173,7 @@ test "kanji mode indicator1" {
 
     const mi = getModeIndicator(m);
 
-    try testing.expectEqual(mi, 0b1000);
+    try testing.expectEqual(mi, "1000");
 }
 
 test "kanji mode indicator2" {
@@ -182,7 +182,7 @@ test "kanji mode indicator2" {
 
     const mi = getModeIndicator(m);
 
-    try testing.expectEqual(mi, 0b1000);
+    try testing.expectEqual(mi, "1000");
 }
 
 test "kanji mode indicator3" {
@@ -191,5 +191,5 @@ test "kanji mode indicator3" {
 
     const mi = getModeIndicator(m);
 
-    try testing.expectEqual(mi, 0b1000);
+    try testing.expectEqual(mi, "1000");
 }
