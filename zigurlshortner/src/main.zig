@@ -6,8 +6,9 @@ const App = struct {
     allocator: std.mem.Allocator,
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+pub fn main(init: std.process.Init) !void {
+    var gpa = std.heap.DebugAllocator(.{}).init;
+    defer _ = gpa.deinit();
     const gpa_alloc = gpa.allocator();
 
     var url_map = std.StringHashMap([]const u8).init(gpa_alloc);
@@ -25,7 +26,7 @@ pub fn main() !void {
         .allocator = gpa_alloc,
     };
 
-    var server = try httpz.Server(*App).init(gpa_alloc, .{ .port = 8080 }, &app);
+    var server = try httpz.Server(*App).init(init.io, gpa_alloc, .{ .address = .localhost(8080) }, &app);
     defer {
         server.stop();
         server.deinit();
