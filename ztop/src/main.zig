@@ -194,7 +194,7 @@ const Process = struct {
         defer proc_dir.close(io);
 
         var dir_iter = proc_dir.iterate();
-        while (try dir_iter.next()) |entry| {
+        while (try dir_iter.next(io)) |entry| {
             if (entry.kind != .directory) continue;
 
             const pid = fmt.parseUnsigned(u32, entry.name, 10) catch continue;
@@ -203,7 +203,7 @@ const Process = struct {
             const pid_path: []u8 = try fmt.bufPrint(&buff, "/proc/{d}/stat", .{pid});
 
             var rbuff: [1024]u8 = undefined;
-            const content: []u8 = Io.Dir.readFile(.cwd(), io, pid_path, &rbuff, .{}) catch continue;
+            const content: []u8 = Io.Dir.readFile(.cwd(), io, pid_path, &rbuff) catch continue;
 
             const clock_tcks: u64 = 100;
 
@@ -218,7 +218,8 @@ const Process = struct {
             const after_name: []u8 = content[last_paren + 2 ..];
             var fields = mem.tokenizeScalar(u8, after_name, ' ');
 
-            const state = (fields.next() orelse "?")[0];
+            const question_mark: []const u8 = "?";
+            const state = (fields.next() orelse question_mark)[0];
             _ = fields.next(); // ppid
             _ = fields.next(); // pgrp
             _ = fields.next(); // session
@@ -294,7 +295,7 @@ fn getLoadAvg(io: Io) ![3]f64 {
 }
 
 pub fn main(init: std.process.Init) !void {
-    var alloc: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    var alloc: std.heap.DebugAllocator(.{}) = .init;
     defer _ = alloc.deinit();
     const gpa: mem.Allocator = alloc.allocator();
 
@@ -304,23 +305,22 @@ pub fn main(init: std.process.Init) !void {
     const io: Io = threaded_io.io();
 
     var buff: [1024]u8 = undefined;
-    var tty = try vaxis.Tty.init(&buff);
+    var tty = try vaxis.Tty.init(io, &buff);
     defer tty.deinit();
 
     const tty_writer = tty.writer();
-    var vx = try vaxis.init(gpa, .{});
+    var vx = try vaxis.init(io, gpa, init.environ_map, .{});
     defer vx.deinit(gpa, tty_writer);
 
     var loop: vaxis.Loop(union(enum) {
         key_press: vaxis.Key,
         winsize: vaxis.Winsize,
-    }) = .{ .tty = &tty, .vaxis = &vx };
-    try loop.init();
+    }) = .init(io, &tty, &vx);
     try loop.start();
     defer loop.stop();
 
     try vx.enterAltScreen(tty_writer);
-    try vx.queryTerminal(tty_writer, 1 * time.ns_per_ms);
+    try vx.queryTerminal(tty_writer, .fromSeconds(1));
 
     const active_bg: vaxis.Cell.Color = .{ .rgb = .{ 64, 128, 255 } };
     const selected_bg: vaxis.Cell.Color = .{ .rgb = .{ 32, 64, 255 } };
@@ -344,7 +344,7 @@ pub fn main(init: std.process.Init) !void {
         defer _ = event_arena.reset(.retain_capacity);
         const event_alloc = event_arena.allocator();
 
-        while (loop.tryEvent()) |event| {
+        while (try loop.tryEvent()) |event| {
             switch (event) {
                 .key_press => |key| {
                     if (key.matches('c', .{ .ctrl = true }) or key.matches('q', .{})) return;
@@ -353,18 +353,18 @@ pub fn main(init: std.process.Init) !void {
                 .winsize => |ws| try vx.resize(gpa, tty_writer, ws),
             }
         }
-        const now: Io.Timestamp = try Io.Clock.now(.real, io);
-        const t_now: i64 = try now.toMilliseconds();
+        const now: Io.Timestamp = Io.Clock.now(.real, io);
+        const t_now: i64 = now.toMilliseconds();
 
         if (t_now - last_update >= 1000) {
-            last_update = now;
+            last_update = t_now;
 
             const win = vx.window();
             win.clear();
 
             // Header
             // current time and up time
-            const total_secs: i96 = now.nanoseconds / std.time.ns_per_s;
+            const total_secs: i96 = @divTrunc(now.nanoseconds, std.time.ns_per_s);
 
             // add timezone offset,for IST it is +5:30
             const timeoffset: i96 = 5 * 3600 + 30 * 60;
@@ -487,7 +487,7 @@ pub fn main(init: std.process.Init) !void {
 
             try vx.render(tty_writer);
         }
-        io.sleep(.fromNanoseconds(100), .cpu_thread);
+        try io.sleep(.fromNanoseconds(100), .cpu_thread);
     }
     tty_writer.flush();
 }
