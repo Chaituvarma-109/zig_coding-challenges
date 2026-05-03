@@ -41,15 +41,27 @@ pub fn getMode(inp: []const u8) !Modes {
     if (is_alphanumeric) return .alphanumeric;
 
     const is_kanji = blk: {
+        if (!unicode.utf8ValidateSlice(inp)) break :blk false;
+        if (inp.len == 0) break :blk false;
+        // if (inp.len == 0 or inp.len % 2 != 0) break :blk false;
+        // var i: usize = 0;
+        // while (i < inp.len) : (i += 2) {
+        //     const sjis: u16 = (@as(u16, inp[i]) << 8) | inp[i + 1];
+        //     const in_range = (sjis >= 0x8140 and sjis <= 0x9FFC) or
+        //         (sjis >= 0xE040 and sjis <= 0xEBBF);
+        //     if (!in_range) break :blk false;
+        // }
         var found_kanji = false;
         var kiter = unicode.Utf8Iterator{ .bytes = inp, .i = 0 };
 
         while (kiter.nextCodepoint()) |cp| {
             if ((cp >= 0x3000 and cp <= 0x303F) or
-                (cp >= 0x3040 and cp <= 0x30FF) or
-                (cp >= 0x31F0 and cp <= 0x33FF) or
+                (cp >= 0x3040 and cp <= 0x309F) or
+                (cp >= 0x30A0 and cp <= 0x30FF) or
                 (cp >= 0x3400 and cp <= 0x4DBF) or
-                (cp >= 0x4E00 and cp <= 0x9FFF))
+                (cp >= 0x4E00 and cp <= 0x9FAF) or
+                (cp >= 0xFF01 and cp <= 0xFF60) or
+                (cp >= 0xFFE3 and cp <= 0xFFE5))
             {
                 found_kanji = true;
             }
@@ -60,6 +72,7 @@ pub fn getMode(inp: []const u8) !Modes {
     if (is_kanji) return .kanji;
 
     const is_byte = blk: {
+        if (!unicode.utf8ValidateSlice(inp)) break :blk false;
         var biter = unicode.Utf8Iterator{ .bytes = inp, .i = 0 };
 
         while (biter.nextCodepoint()) |cp| {
@@ -118,13 +131,27 @@ test "kanji mode1" {
 }
 
 test "kanji mode2" {
-    const str2 = "23423423424234漢";
+    const str2 = "茗荷";
     const m = try getMode(str2);
 
     try testing.expectEqual(m, Modes.kanji);
 }
 
 test "kanji mode3" {
+    const str = "こんにちは";
+    const m = try getMode(str);
+
+    try testing.expectEqual(m, Modes.kanji);
+}
+
+test "kanji mode4" {
+    const str = "234234243234漢";
+    const m = try getMode(str);
+
+    try testing.expectEqual(m, Modes.kanji);
+}
+
+test "kanji mode5" {
     const str = "https://anywebsite.com?漢";
     const m = try getMode(str);
 
@@ -177,7 +204,7 @@ test "kanji mode indicator1" {
 }
 
 test "kanji mode indicator2" {
-    const str = "23423423424234漢";
+    const str = "茗荷";
     const m = try getMode(str);
 
     const mi = getModeIndicator(m);
@@ -186,6 +213,24 @@ test "kanji mode indicator2" {
 }
 
 test "kanji mode indicator3" {
+    const str = "こんにちは";
+    const m = try getMode(str);
+
+    const mi = getModeIndicator(m);
+
+    try testing.expectEqual(mi, "1000");
+}
+
+test "kanji mode indicator4" {
+    const str = "234234243234漢";
+    const m = try getMode(str);
+
+    const mi = getModeIndicator(m);
+
+    try testing.expectEqual(mi, "1000");
+}
+
+test "kanji mode indicator5" {
     const str = "https://anywebsite.com?漢";
     const m = try getMode(str);
 
