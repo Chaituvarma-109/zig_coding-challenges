@@ -11,6 +11,10 @@ pub const EcBlock = struct {
     pub fn getTotalDataCodewords(v: usize, ecl: ECL) u16 {
         return ec_table[v - 1][@intFromEnum(ecl)].total_data_codewords;
     }
+
+    pub fn getBloc(v: usize, ecl: ECL) EcBlock {
+        return ec_table[v - 1][@intFromEnum(ecl)];
+    }
 };
 
 // Index: [version - 1][ec_level] where ec_level L=0 M=1 Q=2 H=3
