@@ -1,7 +1,6 @@
 const std = @import("std");
 const Io = std.Io;
 
-const lex = @import("lexer.zig");
 const parse = @import("parser.zig");
 
 pub fn main(init: std.process.Init) !void {
@@ -21,8 +20,7 @@ pub fn main(init: std.process.Init) !void {
     }
     file_name = args[1];
 
-    var buff: [1024]u8 = undefined;
-    const content: []u8 = try Io.Dir.cwd().readFile(io, file_name, &buff);
+    const content: []u8 = try Io.Dir.cwd().readFileAlloc(io, file_name, arena, .unlimited);
 
     if (content.len == 0) {
         try stdout_writer.print("empty file.\n", .{});
@@ -30,19 +28,12 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    var r = try lex.lexe(arena, content);
-    defer r.deinit(arena);
-
-    if (r.len == 0) {
-        try stdout_writer.print("Invalid json", .{});
+    parse.parse(content) catch {
+        try stdout_writer.print("{s}: invalid\n", .{file_name});
         try stdout_writer.flush();
-    }
+        std.process.exit(1);
+    };
 
-    const res: [][]const u8 = try parse.parse(arena, r, content);
-
-    for (res) |val| {
-        try stdout_writer.print("{s}", .{val});
-    }
-    try stdout_writer.writeAll("\n");
+    try stdout_writer.print("{s} is valid json\n", .{file_name});
     try stdout_writer.flush();
 }
