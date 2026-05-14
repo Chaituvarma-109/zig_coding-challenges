@@ -26,15 +26,7 @@ fn skipWhitespace(r: *Io.Reader) void {
     } else |_| {}
 }
 
-pub fn parse(bytes: []u8) ParseError!void {
-    if (bytes.len == 0) {
-        std.log.err("Empty Input\n", .{});
-        return ParseError.EmptyInput;
-    }
-
-    var reader: Io.Reader = .fixed(bytes);
-    const r = &reader;
-
+pub fn parse(r: *Io.Reader) ParseError!void {
     skipWhitespace(r);
     _ = r.peekByte() catch {
         std.log.err("Input contains only whitespace", .{});
@@ -243,7 +235,7 @@ fn parseString(r: *Io.Reader) ParseError!void {
                 switch (esc) {
                     '"', '\\', '/', 'b', 'f', 'n', 'r', 't' => {},
                     'u' => {
-                        const hex = r.takeArray(4) catch |err| switch (err) {
+                        const hex = r.take(4) catch |err| switch (err) {
                             error.EndOfStream => {
                                 std.log.err("Incomplete \\uXXXX escape", .{});
                                 return ParseError.InvalidString;
@@ -343,7 +335,7 @@ fn parseNumber(r: *Io.Reader) ParseError!void {
 }
 
 fn parseLiteral(r: *Io.Reader, comptime expected: []const u8) ParseError!void {
-    const got = r.takeArray(expected.len) catch |err| switch (err) {
+    const got = r.take(expected.len) catch |err| switch (err) {
         error.EndOfStream => {
             std.log.err("Expected a JSON value but reached end of input", .{});
             return ParseError.UnexpectedEof;

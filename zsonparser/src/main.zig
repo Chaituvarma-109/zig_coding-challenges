@@ -1,11 +1,8 @@
 const std = @import("std");
+const parser = @import("parser.zig");
 const Io = std.Io;
 
-const parse = @import("parser.zig");
-
 pub fn main(init: std.process.Init) !void {
-    const arena: std.mem.Allocator = init.arena.allocator();
-
     const io: Io = init.io;
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
@@ -13,22 +10,22 @@ pub fn main(init: std.process.Init) !void {
 
     var file_name: []const u8 = undefined;
 
-    const args: []const [:0]const u8 = try init.minimal.args.toSlice(arena);
-    if (args.len <= 1) {
+    var args = init.minimal.args.iterate();
+    _ = args.skip();
+
+    file_name = args.next() orelse {
         std.log.err("Invalid arg, maybe filename missing", .{});
         return;
-    }
-    file_name = args[1];
+    };
 
-    const content: []u8 = try Io.Dir.cwd().readFileAlloc(io, file_name, arena, .unlimited);
+    const file = try Io.Dir.openFile(.cwd(), io, file_name, .{});
+    defer file.close(io);
 
-    if (content.len == 0) {
-        try stdout_writer.print("empty file.\n", .{});
-        try stdout_writer.flush();
-        return;
-    }
+    var buff: [1024]u8 = undefined;
+    var fr = file.reader(io, &buff);
+    const r = &fr.interface;
 
-    parse.parse(content) catch {
+    parser.parse(r) catch {
         try stdout_writer.print("{s}: invalid\n", .{file_name});
         try stdout_writer.flush();
         std.process.exit(1);
