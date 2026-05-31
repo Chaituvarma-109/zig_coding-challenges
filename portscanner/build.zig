@@ -13,6 +13,13 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const zio = b.dependency("zio", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe.root_module.addImport("zio", zio.module("zio"));
+
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");
