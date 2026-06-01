@@ -3,7 +3,6 @@ const zio = @import("zio");
 
 const mem = std.mem;
 const Io = std.Io;
-const net = Io.net;
 const ArrayList = std.ArrayList;
 
 const BATCH_SIZE: usize = 500;
@@ -57,41 +56,48 @@ pub fn main(init: std.process.Init) !void {
         alloc.free(hosts);
     }
 
+    const is_wildcard = mem.containsAtLeast(u8, scanner.host, 1, "*");
+
     if (scanner.port) |p| {
+        // Port given: probe that exact port on every expanded host.
         if (hosts.len == 1) {
-            std.debug.print("for single host with port\n", .{});
-            const task = Task{ .host = scanner.host, .port = p, .timeout = scanner.timeout, .wr = scanner.wr };
+            // Single host, single port — direct scan, no concurrency needed.
+            const task = Task{ .host = hosts[0], .port = p, .timeout = scanner.timeout, .wr = scanner.wr };
             try scan(task);
         } else {
+            // Multiple hosts (comma-list or wildcard) + explicit port.
             var group: zio.Group = .init;
             defer group.cancel();
-            std.debug.print("for multiple hosts with port\n", .{});
             for (hosts) |host| {
-                // const task = Task{ .host = host, .port = p, .timeout = scanner.timeout, .wr = scanner.wr };
-                try group.spawn(sweepScan, .{host});
+                const task = Task{ .host = host, .port = p, .timeout = scanner.timeout, .wr = scanner.wr };
+                try group.spawn(scan, .{task});
             }
             try group.wait();
         }
+    } else if (is_wildcard) {
+        // Wildcard, no port → sweep scan (common ports) across all expanded hosts.
+        var i: usize = 0;
+        while (i < hosts.len) {
+            const batch_end = @min(i + BATCH_SIZE, hosts.len);
+
+            var group: zio.Group = .init;
+            defer group.cancel();
+
+            for (hosts[i..batch_end]) |host| {
+                scanner.host = host;
+                try group.spawn(sweepScan, .{scanner});
+            }
+            try group.wait();
+            i = batch_end;
+        }
     } else {
+        // No wildcard, no port → full vanilla scan on every host.
         var group: zio.Group = .init;
         defer group.cancel();
-
-        if (hosts.len > 1 and (!std.mem.containsAtLeast(u8, scanner.host, 1, "*") or !std.mem.containsAtLeast(u8, scanner.host, 1, "/"))) {
-            std.debug.print("for multiple hosts with no '*' and '/'\n", .{});
-            for (hosts) |h| {
-                scanner.host = h;
-                try group.spawn(vanillaScan, .{scanner});
-            }
-        } else if (hosts.len > 1 and (std.mem.containsAtLeast(u8, scanner.host, 1, "*") or std.mem.containsAtLeast(u8, scanner.host, 1, "/"))) {
-            std.debug.print("for multiple hosts with '*' and '/'\n", .{});
-            for (hosts) |host| {
-                try group.spawn(sweepScan, .{host});
-            }
-        } else {
-            std.debug.print("for single hosts with no port\n", .{});
+        for (hosts) |host| {
+            scanner.host = host;
             try group.spawn(vanillaScan, .{scanner});
         }
-
         try group.wait();
     }
 }
@@ -105,7 +111,7 @@ fn parseHost(alloc: std.mem.Allocator, host: []const u8) ![][]const u8 {
 
     if (mem.containsAtLeast(u8, host, 1, "*")) {
         if (mem.startsWith(u8, host, "*")) {
-            const last = host[1..];
+            const last = host[2..];
             for (0..255) |value| {
                 const res = try std.fmt.allocPrint(alloc, "{d}.{s}", .{ value, last });
                 defer alloc.free(res);
@@ -113,7 +119,7 @@ fn parseHost(alloc: std.mem.Allocator, host: []const u8) ![][]const u8 {
                 try host_lst.append(alloc, res_dupe);
             }
         } else if (mem.endsWith(u8, host, "*")) {
-            const first = host[0 .. host.len - 1];
+            const first = host[0 .. host.len - 2];
             for (0..255) |value| {
                 const res = try std.fmt.allocPrint(alloc, "{s}.{d}", .{ first, value });
                 defer alloc.free(res);
@@ -122,10 +128,10 @@ fn parseHost(alloc: std.mem.Allocator, host: []const u8) ![][]const u8 {
             }
         } else {
             const idx = mem.find(u8, host, "*") orelse return error.InvalidIpAddress;
-            const first = host[0..idx];
-            const last = host[idx + 1 ..];
+            const first = host[0 .. idx - 1];
+            const last = host[idx + 2 ..];
             for (0..255) |value| {
-                const res = try std.fmt.allocPrint(alloc, "{any}.{d}.{any}", .{ first, value, last });
+                const res = try std.fmt.allocPrint(alloc, "{s}.{d}.{s}", .{ first, value, last });
                 defer alloc.free(res);
                 const res_dupe = try alloc.dupe(u8, res);
                 try host_lst.append(alloc, res_dupe);
@@ -185,7 +191,35 @@ fn scan(task: Task) !void {
     return;
 }
 
-// TODO
-fn sweepScan(host: []const u8) !void {
-    _ = host;
+const SWEEP_PORTS = [_]u16{
+    21,  22,  23,  25,  53,   80,   110,  135,  139,  143,
+    443, 445, 993, 995, 1723, 3306, 3389, 5900, 8080, 8443,
+};
+
+fn sweepScan(scanner: Scanner) !void {
+    const ports: []const u16 = if (scanner.port) |p|
+        &[_]u16{p}
+    else
+        &SWEEP_PORTS;
+
+    var i: usize = 0;
+    while (i < ports.len) {
+        const batch_end = @min(i + BATCH_SIZE, ports.len);
+
+        var batch: zio.Group = .init;
+        defer batch.cancel();
+
+        for (ports[i..batch_end]) |port| {
+            const task = Task{
+                .host = scanner.host,
+                .port = port,
+                .timeout = scanner.timeout,
+                .wr = scanner.wr,
+            };
+            try batch.spawn(scan, .{task});
+        }
+
+        try batch.wait();
+        i = batch_end;
+    }
 }
