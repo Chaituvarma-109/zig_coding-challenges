@@ -11,6 +11,31 @@ const TCP_SYN: u8 = 0x02;
 const TCP_RST: u8 = 0x04;
 const TCP_ACK: u8 = 0x10;
 
+const IpHeader = extern struct {
+    ver_ihl: u8,
+    tos: u8,
+    tot_len: u16,
+    id: u16,
+    frag_off: u16,
+    ttl: u8,
+    protocol: u8,
+    check: u16,
+    saddr: u32,
+    daddr: u32,
+};
+
+const TcpHeader = extern struct {
+    source: u16,
+    dest: u16,
+    seq: u32,
+    ack_seq: u32,
+    data_off_res: u8,
+    flags: u8,
+    window: u16,
+    check: u16,
+    urg_ptr: u16,
+};
+
 const Config = struct {
     host: []const u8 = undefined,
     port: ?u16 = null,
@@ -227,31 +252,6 @@ fn sweepScan(scanner: Config) !void {
     }
 }
 
-const IpHeader = extern struct {
-    ver_ihl: u8,
-    tos: u8,
-    tot_len: u16,
-    id: u16,
-    frag_off: u16,
-    ttl: u8,
-    protocol: u8,
-    check: u16,
-    saddr: u32,
-    daddr: u32,
-};
-
-const TcpHeader = extern struct {
-    source: u16,
-    dest: u16,
-    seq: u32,
-    ack_seq: u32,
-    data_off_res: u8,
-    flags: u8,
-    window: u16,
-    check: u16,
-    urg_ptr: u16,
-};
-
 fn resolveIpv4(host: []const u8) !u32 {
     if (zio.net.IpAddress.parseIp4(host, 0)) |addr| {
         return mem.bigToNative(u32, addr.ip4.addr);
@@ -348,7 +348,7 @@ fn internetChecksum(data: []const u8) u16 {
     return ~@as(u16, @truncate(sum));
 }
 
-fn sendRst(sock: zio.net.Socket, src_ip: u32, dst_ip: u32, src_port: u16, dst_port: u16, syn_ack: TcpHeader, timeout: zio.Timeout) void {
+fn sendRst(sock: zio.net.Socket, src_ip: u32, dst_ip: u32, src_port: u16, dst_port: u16, syn_ack: TcpHeader, timeout: zio.Timeout, prng: std.Random.Xoshiro256) void {
     // Our RST sequence number = the ACK number the server sent us.
     const rst_seq = mem.bigToNative(u32, syn_ack.ack_seq);
 
@@ -369,7 +369,7 @@ fn sendRst(sock: zio.net.Socket, src_ip: u32, dst_ip: u32, src_port: u16, dst_po
         .ver_ihl = 0x45,
         .tos = 0,
         .tot_len = mem.nativeToBig(u16, @sizeOf(IpHeader) + @sizeOf(TcpHeader)),
-        .id = 0,
+        .id = prng.random().int(u16),
         .frag_off = 0,
         .ttl = 64,
         .protocol = 6,
@@ -426,7 +426,7 @@ fn synScan(task: Task) !void {
         .ver_ihl = 0x45,
         .tos = 0,
         .tot_len = mem.nativeToBig(u16, @sizeOf(IpHeader) + @sizeOf(TcpHeader)),
-        .id = 0,
+        .id = prng.random().int(u16),
         .frag_off = 0,
         .ttl = 64,
         .protocol = linux.IPPROTO.TCP,
